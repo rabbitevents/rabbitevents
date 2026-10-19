@@ -5,14 +5,22 @@ declare(strict_types=1);
 namespace RabbitEvents\Publisher\Support;
 
 use Illuminate\Container\Container;
+use Illuminate\Support\Str;
 use RabbitEvents\Publisher\Publisher;
 use RabbitEvents\Publisher\ShouldPublish;
 
 trait PublishableEventTesting
 {
+    /**
+     * Record published events instead of sending them. `afterCommit` handling stays real,
+     * so an event published inside a rolled back transaction is not recorded.
+     */
     public static function fake(): void
     {
-        Container::getInstance()->instance(Publisher::class, \Mockery::spy(Publisher::class));
+        $publisher = \Mockery::mock(Publisher::class)->makePartial()->shouldAllowMockingProtectedMethods();
+        $publisher->shouldReceive('executePublish')->andReturnUsing(static fn() => (string) Str::uuid());
+
+        Container::getInstance()->instance(Publisher::class, $publisher);
     }
 
     public static function assertPublished(
@@ -21,7 +29,7 @@ trait PublishableEventTesting
     ): void {
         Container::getInstance()->get(Publisher::class)
             ->shouldHaveReceived()
-            ->publish(static::createPublishMatcher($event, $payload))
+            ->executePublish(static::createPublishMatcher($event, $payload))
             ->atLeast()
             ->once();
     }
@@ -33,7 +41,7 @@ trait PublishableEventTesting
     ): void {
         Container::getInstance()->get(Publisher::class)
             ->shouldHaveReceived()
-            ->publish(static::createPublishMatcher($event, $payload))
+            ->executePublish(static::createPublishMatcher($event, $payload))
             ->times($times);
     }
 
@@ -67,13 +75,13 @@ trait PublishableEventTesting
     {
         Container::getInstance()->make(Publisher::class)
             ->shouldNotHaveReceived()
-            ->publish(static::createPublishMatcher($callback));
+            ->executePublish(static::createPublishMatcher($callback));
     }
 
     public static function assertNothingPublished(): void
     {
+        // A method name without arguments matches calls with any arguments.
         Container::getInstance()->make(Publisher::class)
-            ->shouldNotHaveReceived()
-            ->publish();
+            ->shouldNotHaveReceived('executePublish');
     }
 }

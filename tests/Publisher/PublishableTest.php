@@ -48,7 +48,7 @@ class PublishableTest extends TestCase
             "key2" => 'value2',
         ];
 
-        self::assertNull(Listener::publish($payload));
+        self::assertIsString(Listener::publish($payload));
 
         Listener::assertPublished('something.happened', $payload);
     }
@@ -57,7 +57,7 @@ class PublishableTest extends TestCase
     {
         Listener::fake();
 
-        self::assertNull(Listener::publish(['whatever' => 1]));
+        self::assertIsString(Listener::publish(['whatever' => 1]));
 
         Listener::assertPublished('something.happened');
     }
@@ -73,7 +73,7 @@ class PublishableTest extends TestCase
             "key2" => 'value2',
         ];
 
-        self::assertNull(Listener::publish($payload));
+        self::assertIsString(Listener::publish($payload));
 
         Listener::assertPublished('something.other.happened', []);
     }
@@ -82,7 +82,7 @@ class PublishableTest extends TestCase
     {
         Listener::fake();
 
-        self::assertNull(AnotherListener::publish());
+        self::assertIsString(AnotherListener::publish());
 
         Listener::assertNotPublished();
     }
@@ -145,12 +145,61 @@ class PublishableTest extends TestCase
 
         Listener::assertNothingPublished();
     }
+
+    protected function tearDown(): void
+    {
+        Container::getInstance()->forgetInstance('db.transactions');
+
+        parent::tearDown();
+    }
+
+    public function testFakeKeepsAfterCommitEventOfRolledBackTransactionUnpublished(): void
+    {
+        $transactions = new \Illuminate\Database\DatabaseTransactionsManager();
+        Container::getInstance()->instance('db.transactions', $transactions);
+        Listener::fake();
+
+        $transactions->begin('default', 1);
+        (new Listener(['item' => 1]))->afterCommit()->publishThroughHelper();
+        $transactions->rollback('default', 0);
+
+        Listener::assertNothingPublished();
+    }
+
+    public function testFakeRecordsAfterCommitEventOnCommit(): void
+    {
+        $transactions = new \Illuminate\Database\DatabaseTransactionsManager();
+        Container::getInstance()->instance('db.transactions', $transactions);
+        Listener::fake();
+
+        $transactions->begin('default', 1);
+        (new Listener(['item' => 1]))->afterCommit()->publishThroughHelper();
+        Listener::assertNothingPublished();
+
+        $transactions->commit('default', 1, 0);
+        Listener::assertPublishedTimes(1);
+    }
+
+    public function testAssertNothingPublishedFailsWhenSomethingWasPublished(): void
+    {
+        Listener::fake();
+        Listener::publish(['item' => 1]);
+
+        $this->expectException(\Mockery\Exception\InvalidCountException::class);
+
+        Listener::assertNothingPublished();
+    }
 }
 
 class Listener implements ShouldPublish
 {
     use Publishable;
     use PublishableEventTesting;
+
+    public function publishThroughHelper(): ?string
+    {
+        return publish($this);
+    }
 
     private $payload = [];
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace RabbitEvents\Publisher;
 
+use Illuminate\Container\Container;
 use RabbitEvents\Foundation\Contracts\Transport;
 
 class Publisher
@@ -33,11 +34,17 @@ class Publisher
     }
 
     /**
-     * Get the database transaction manager implementation from the resolver.
+     * Get the database transaction manager: from the resolver if set, else Laravel's `db.transactions`.
      */
     protected function resolveTransactionManager(): mixed
     {
-        return $this->transactionManagerResolver ? ($this->transactionManagerResolver)() : null;
+        if ($this->transactionManagerResolver) {
+            return ($this->transactionManagerResolver)();
+        }
+
+        $container = Container::getInstance();
+
+        return $container->bound('db.transactions') ? $container['db.transactions'] : null;
     }
 
     /**

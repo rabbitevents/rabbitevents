@@ -16,16 +16,10 @@ class PublisherServiceProvider extends ServiceProvider
     {
         $this->app->singleton(
             Publisher::class,
-            static function ($app) {
-                return (new Publisher(
-                    new MessageFactory($app[SerializerRegistry::class]),
-                    new Sender($app[Context::class]->makeTopic(), $app[Context::class]->createProducer())
-                ))->setTransactionManagerResolver(function () use ($app) {
-                    return $app->bound('db.transactions')
-                        ? $app['db.transactions']
-                        : null;
-                });
-            }
+            static fn($app) => new Publisher(
+                new MessageFactory($app[SerializerRegistry::class]),
+                new Sender($app[Context::class]->makeTopic(), $app[Context::class]->createProducer())
+            )
         );
     }
 
