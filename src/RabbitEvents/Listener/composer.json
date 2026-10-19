@@ -32,6 +32,7 @@
     "illuminate/container": "^11.0|^12.0|^13.0",
     "illuminate/events": "^11.0|^12.0|^13.0",
     "illuminate/log": "^11.0|^12.0|^13.0",
+    "illuminate/pipeline": "^11.0|^12.0|^13.0",
     "illuminate/support": "^11.0|^12.0|^13.0",
     "rabbitevents/foundation": "self.version",
     "ramsey/uuid": "^4.7"
@@ -52,6 +53,7 @@
     }
   },
   "suggest": {
-    "ext-pcntl": "Required to use all features of the worker."
+    "ext-pcntl": "Required to use all features of the worker.",
+    "rabbitevents/deduplication": "Skips messages redelivered after they were handled, using a Laravel cache store shared by the workers."
   }
 }
