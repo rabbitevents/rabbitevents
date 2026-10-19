@@ -16,13 +16,13 @@ If you only need to handle events, you can use the RabbitEvents `Listener` separ
 5. [Middleware](#listener-middleware)
    - [Pipeline Middleware (Onion-style)](#pipeline-middleware-onion-style)
 6. [Stopping The Propagation Of An Event](#stopping-propagation)
-7. [Reliability & Idempotency](#reliability)
-   - [Dead Letter Queue (DLQ)](#dead-letter-queue)
-   - [Deduplication (Idempotency)](#deduplication-idempotency)
+7. [Reliability](#reliability)
+   - [Failed Messages](#failed-messages)
+   - [Deduplication](#deduplication)
 8. [Console Commands](#commands)
    - [Command `rabbitevents:listen`](#command-listen)
      - [Options](#listen-options)
-   - [Dead Letter Queue (DLQ) Commands](#dead-letter-queue-dlq-commands)
+   - [Failed Message Commands](#failed-commands)
    - [Command `rabbitevents:list`](#command-list)
    - [Event Discovery Caching](#discovery-caching)
 9. [Supervisor Configuration](#supervisor)
@@ -59,7 +59,7 @@ use RabbitEvents\Listener\ListenerServiceProvider;
 
 class RabbitEventsServiceProvider extends ListenerServiceProvider
 {
-    protected $listen = [
+    protected array $listen = [
         'payment.succeeded' => [
             'App\Listeners\SendNotification',
             'App\Listeners\ChangeUserRole@process',
@@ -302,32 +302,38 @@ class MeasureExecutionTime
 
 Sometimes, you may wish to stop the propagation of an event to other listeners. You can do so by returning `false` from your listener's handle method.
 
-# Reliability & Idempotency <a name="reliability"></a>
+# Reliability <a name="reliability"></a>
 
-RabbitEvents is designed to work **100% out of the box** relying solely on RabbitMQ—no MySQL database tables, Redis instances, or external migrations are required.
+RabbitEvents relies only on RabbitMQ: no database tables, Redis instances or migrations are required.
 
-### Dead Letter Queue (DLQ)
+## Failed Messages <a name="failed-messages"></a>
 
-When messages exceed maximum retry attempts (`--tries`) or encounter fatal unhandled exceptions, RabbitEvents does not delete them silently. Instead:
-- It declares a topic Dead Letter Exchange (`rabbitevents.dlx`).
-- It binds a dedicated DLQ queue (`{queue}.failed`).
-- When a message fails, it is moved to `{queue}.failed` alongside diagnostic headers: `x-failed-at`, `x-original-routing-key`, `x-exception-message`, `x-exception-class`, `x-exception-trace`, and `x-listener`. Earlier listeners that already succeeded on the message are recorded in `x-succeeded-listeners` and skipped on retry; however, listeners should still be designed to be idempotent.
+A message fails when a listener exhausts its tries (`--tries`), exceeds the timeout (`--timeout`), or throws `RabbitEvents\Listener\Exceptions\FailedException`. RabbitEvents then moves it to the `{queue}.failed` queue instead of dropping it:
 
-### Deduplication (Idempotency)
+- `{queue}.failed` is a plain durable queue declared by `rabbitevents:listen` next to the listener queue. The listener queue itself is declared exactly as in 9.x, without extra arguments, so 9.x and 10.x workers can consume the same queue.
+- The failed message keeps its payload, `message_id` and `trace_context` and gets these properties: `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` (message and trace are cut to 4 KB to fit into one AMQP frame) and `x-listener`.
+- Messages published by RabbitEvents 9.x have no `message_id`. They get one when moved to `{queue}.failed`, so they can be retried or deleted by ID.
+- Listeners that already succeeded on a message are recorded in `x-succeeded-listeners` and are skipped when the message is retried, both after `--sleep` releases and after `rabbitevents:retry`. Listeners should still be idempotent.
 
-To guard against duplicate message delivery, RabbitEvents includes a pluggable deduplication strategy system:
-- **`InMemoryDeduplicator` (Default)**: An in-memory LRU ring buffer per worker process tracking processed message IDs. Zero database or Redis setup required. Note: This is per-process and lost on worker restart, protecting against redelivery to the same worker after all listeners succeed.
-- **`RabbitMqDeduplicationPluginStrategy`**: Delegates deduplication to the RabbitMQ broker via the `rabbitmq-message-deduplication` plugin using the `x-deduplication-header`.
-- **`NullDeduplicator`**: Disables deduplication if not needed.
+### Interrupted processing <a name="interrupted-messages"></a>
 
-Configured in `config/rabbitevents.php`:
+If processing throws outside the listeners (e.g. in a custom `Deduplicator`), the message is not acknowledged as handled. It is put back into its queue the same way a failed listener releases it (after `--sleep`, counting as an attempt), with `x-succeeded-listeners`, so the listeners that already handled it skip it. Only if the message can't be put back (e.g. the broker is unavailable) is the original returned to RabbitMQ unchanged, and then its listeners run again.
+
+Manage failed messages with the [failed message commands](#failed-commands). To drop failed messages instead, as 9.x did, set `RABBITEVENTS_FAILED_QUEUE_ENABLED=false` (`rabbitevents.failed_queue.enabled`).
+
+## Deduplication <a name="deduplication"></a>
+
+RabbitMQ delivers a message *at least once*: when it doesn't get the acknowledgement (the worker lost its connection or was killed), it delivers the message again, usually to another worker. RabbitEvents doesn't deduplicate such redeliveries by itself, because recognizing them needs storage shared by the workers, and RabbitEvents relies on RabbitMQ only. Write listeners so that handling a message twice is safe, e.g. by checking a business key.
+
+If your service has a cache store shared by its workers, install [`rabbitevents/deduplication`](https://github.com/rabbitevents/deduplication): it skips messages redelivered after they were handled. Its README lists exactly which cases it covers.
+
+You can also bind your own implementation of `RabbitEvents\Listener\Contracts\Deduplicator` in a service provider. `isDuplicate()` is called before the listeners and `markHandled()` after all of them succeeded, both with the queue name, because the same message legitimately reaches every queue bound to its event:
+
 ```php
-'deduplication' => [
-    'enabled' => env('RABBITEVENTS_DEDUPLICATION_ENABLED', true),
-    'strategy' => env('RABBITEVENTS_DEDUPLICATION_STRATEGY', \RabbitEvents\Foundation\Deduplication\InMemoryDeduplicator::class),
-    'cache_size' => env('RABBITEVENTS_DEDUPLICATION_CACHE_SIZE', 10000),
-],
+$this->app->singleton(\RabbitEvents\Listener\Contracts\Deduplicator::class, MyDeduplicator::class);
 ```
+
+If one of them throws, the message is treated as [interrupted](#interrupted-messages).
 
 # Console Commands <a name='commands'></a>
 
@@ -363,44 +369,31 @@ You can start listening to an event only by using the `rabbitevents:listen` comm
 `--service=` - By default, it's `config('app.name')`. When a queue starts, the name of the service becomes a part of a queue name: `service:event.name`. You could override the first part of a queue name by this option.\
 `--memory=128` - The memory limit in megabytes. The RabbitEvents worker restarts if the limit is exceeded.\
 `--timeout=60` - The length of time (in seconds) each Message should be allowed to be handled.\
-`--tries=1` - The Number of times to attempt to handle a Message before routing it to the DLQ (`.failed`).\
+`--tries=1` - The number of times to attempt to handle a Message before moving it to the [failed queue](#failed-messages) (`{queue}.failed`).\
 `--sleep=5` - How long in seconds a worker would wait before the next try to handle a failed message.\
 `--quiet` - Hide console output.\
 `-v` - Verbosity. Enables a stack trace for Exceptions.
 
-## Dead Letter Queue (DLQ) Commands
+## Failed Message Commands <a name="failed-commands"></a>
 
-Manage failed messages sitting in the Dead Letter Queue without needing MySQL or Redis:
+All commands resolve the failed queue the same way `rabbitevents:listen` resolves its queue, from `--service` (default `config('app.name')`) and `--events` (default: all registered events), or take it from `--queue` (with or without the `.failed` suffix). `--connection` selects the connection.
 
-### View Failed Messages (`rabbitevents:failed`)
 ```bash
+# List failed messages: ID, event, failure time and exception (--limit=50 by default)
 php artisan rabbitevents:failed
 php artisan rabbitevents:failed --events="order.created,order.shipped"
 php artisan rabbitevents:failed --queue=my-service:order.created
-```
-Displays a table of failed messages containing message ID, event name, failed timestamp, and exception details.
 
-### Retry Failed Messages (`rabbitevents:retry`)
-```bash
-# Retry a specific message by its UUID
+# Move a failed message back to its original queue, with attempts reset
 php artisan rabbitevents:retry 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
-
-# Retry all failed messages
-php artisan rabbitevents:retry --all
 php artisan rabbitevents:retry --all --events="order.created"
-```
-Republishes failed message(s) back onto the original queue where it failed (with attempts reset) and removes them from the failed queue.
 
-### Delete a Failed Message (`rabbitevents:forget`)
-```bash
+# Delete one failed message, or all of them
 php artisan rabbitevents:forget 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
-```
-
-### Flush All Failed Messages (`rabbitevents:flush`)
-```bash
-php artisan rabbitevents:flush
 php artisan rabbitevents:flush --events="order.created"
 ```
+
+`failed`, `retry <id>` and `forget <id>` read up to 10,000 messages and keep them unacknowledged until they finish, then return the messages they didn't touch to the queue in the original order. `retry --all` and `flush` read the whole queue. Any scan stops when it reaches a message it has already seen, e.g. a retried message that failed again.
 
 ## Command `rabbitevents:list` <a name='command-list'></a>
 

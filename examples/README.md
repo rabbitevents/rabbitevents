@@ -4,13 +4,13 @@ This folder contains practical reference implementations and boilerplate classes
 
 ## Publishers
 * **[UserCreated.php](./UserCreated.php)** - Standard publishable event with payload mapping and different ways to call `publish()`.
-* **[TransactionalEvent.php](./TransactionalEvent.php)** - Safe publishing inside database transactions (`$afterCommit = true`).
+* **[TransactionalEvent.php](./TransactionalEvent.php)** - Safe publishing inside database transactions (`ShouldPublishAfterCommit`).
 * **[ContextTracingEvent.php](./ContextTracingEvent.php)** - Distributed tracing with Laravel `Context` and capturing the generated Message ID.
 
 ## Listeners & Consumers
 * **[AttributeListener.php](./AttributeListener.php)** - Modern PHP attribute listener using `#[Listener('event.name')]`.
 * **[OrderEventsSubscriber.php](./OrderEventsSubscriber.php)** - Handling multiple domain events within a single subscriber class.
-* **[IdempotentPaymentListener.php](./IdempotentPaymentListener.php)** - Safe, idempotent processing with distributed trace ID extraction.
+* **[IdempotentPaymentListener.php](./IdempotentPaymentListener.php)** - Idempotent processing guarded by a business key, with distributed trace ID extraction.
 * **[WildcardListener.php](./WildcardListener.php)** - Catch-all and wildcard event handler with matching logic and conditional propagation.
 * **[Listener.php](./Listener.php)** - Standard listener with middleware stack attached.
 

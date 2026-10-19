@@ -113,22 +113,33 @@ The `publish` helper returns the message ID (`?string`), which you can use for l
 If an event is published within a database transaction, you usually want to guarantee that the message is sent only after the database transaction commits successfully:
 
 ```php
-class PaymentSucceededRabbitEvent implements ShouldPublish
+class PaymentSucceededRabbitEvent implements ShouldPublishAfterCommit
 {
     use Publishable;
 
-    public bool $afterCommit = true;
-
     // ...
 }
+
+// Or per publish:
+publish((new PaymentSucceededRabbitEvent($payment))->afterCommit());
 ```
 
-When `$afterCommit = true`, RabbitEvents automatically delays publishing until the active database transaction commits. If the transaction rolls back, the event is not published.
+RabbitEvents then delays publishing until the active database transaction commits. If the transaction rolls back, the event is not published. Inside a transaction `publish()` returns `null`, because the message ID is only known once the message is actually sent.
+
+Don't redeclare `$afterCommit` in your event class: the `Publishable` trait already declares it, and PHP rejects a trait property redeclared with a different default.
 
 ### Distributed Tracing & Context Propagation
 
-RabbitEvents automatically captures and propagates Laravel's `Context` data (Laravel 11+) via AMQP headers (`trace_context`). Any contextual attributes (such as trace IDs, request IDs, or authenticated user info) set before publishing will be hydrated automatically on the listener side.
+RabbitEvents copies Laravel's `Context` data (`Context::all()`) into the `trace_context` message property on publish, and the listener adds it to its own `Context` while handling the message. Hidden context (`Context::addHidden()`) is not sent. Objects are converted to AMQP-safe values: models to `Class:id`, `JsonSerializable`/`Arrayable` objects to arrays, `Stringable` objects to strings.
 
+```php
+use Illuminate\Support\Facades\Context;
+
+Context::add('trace_id', $request->header('X-Trace-Id'));
+
+publish('order.created', $order->toArray());
+// In the listener: Context::get('trace_id')
+```
 
 ### Publish an Event object with the `publish` function
 
@@ -137,10 +148,9 @@ You can also use a combination of the two previous methods:
 ```php
 <?php
 
-$event = new PaymentSucceededEvent($request->user(), $payment);
+$event = new PaymentSucceededRabbitEvent($request->user(), $payment);
 
-event($event)
-publish($event);
+$messageId = publish($event);
 ```
 
 ### Publishing Protobuf Messages
@@ -155,7 +165,7 @@ $message = new AccountCreated(['id' => 123, 'name' => 'John']);
 
 publish('account.created', $message);
 ```
-The `type` header will be automatically set to `App\Messages\AccountCreated`, allowing the consumer to re-hydrate the object.
+The `type` property will be automatically set to `App\Messages\AccountCreated`, allowing the consumer to re-hydrate the object.
 
 ## Testing <a name="testing"></a>
 
@@ -168,7 +178,7 @@ There is the `PublishableEventTesting` trait that provides assertion methods in 
 ```php
 <?php
 
-namespace App\BroadcastEvents;
+namespace App\RabbitEvents;
 
 use RabbitEvents\Publisher\ShouldPublish;
 use RabbitEvents\Publisher\Support\Publishable;
@@ -220,9 +230,18 @@ Event::assertPublishedTimes(1);
 
 // Assert an event was not published
 AnotherEvent::assertNotPublished();
+```
 
-// Assert nothing was published at all
+`assertNothingPublished()` checks that no event was published at all:
+
+```php
+Event::fake();
+
+$service->doNothingInteresting();
+
 Event::assertNothingPublished();
 ```
+
+`fake()` records events instead of sending them, returns a message ID from `publish()` like the real publisher, and keeps the `afterCommit` behaviour: an event published inside a transaction is recorded only when the transaction commits.
 
 Don't forget to call `\Mockery::close()` in `tearDown` or similar methods of your tests.

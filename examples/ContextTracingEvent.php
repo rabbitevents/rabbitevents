@@ -9,12 +9,10 @@ use Illuminate\Support\Str;
 use RabbitEvents\Publisher\ShouldPublish;
 use RabbitEvents\Publisher\Support\Publishable;
 
-use function RabbitEvents\Publisher\publish;
-
 /**
  * Example demonstrating Distributed Tracing with Laravel Context.
  * All context metadata (e.g. trace_id, user_id) added via Context::add()
- * is automatically sent in message headers and restored on the receiving microservice.
+ * is sent in the `trace_context` message property and restored on the receiving microservice.
  */
 class ContextTracingEvent implements ShouldPublish
 {

@@ -32,8 +32,8 @@ RabbitEvents helps you publish an event and handle it seamlessly in other applic
    * [Listening for Events](#quick-start-listener)
 1. [Reliability & Guarantees (Zero-DB Architecture)](#reliability)
    * [Message IDs & Observability](#message-ids)
-   * [Idempotency & Deduplication](#deduplication)
-   * [Dead Letter Queue (DLQ) & Failed Message Management](#dead-letter-queue)
+   * [Failed Messages](#failed-messages)
+   * [Deduplication](#deduplication)
    * [Transactional Publishing (ShouldPublishAfterCommit)](#transactional-publishing)
    * [Distributed Tracing & Context Propagation](#distributed-tracing)
 1. [Listeners & Payloads](#listeners-payloads)
@@ -82,18 +82,6 @@ return [
             'pass' => env('RABBITEVENTS_PASSWORD', 'guest'),
             'vhost' => env('RABBITEVENTS_VHOST', 'events'),
             'delay_strategy' => env('RABBITEVENTS_DELAY_STRATEGY', RabbitMqDlxDelayStrategy::class),
-            
-            'deduplication' => [
-                'enabled' => env('RABBITEVENTS_DEDUPLICATION_ENABLED', true),
-                'strategy' => \RabbitEvents\Foundation\Deduplication\InMemoryDeduplicator::class,
-                'cache_size' => env('RABBITEVENTS_DEDUPLICATION_CACHE_SIZE', 10000),
-            ],
-            
-            'dlx' => [
-                'enabled' => env('RABBITEVENTS_DLX_ENABLED', true),
-                'exchange' => env('RABBITEVENTS_DLX_EXCHANGE', 'rabbitevents.dlx'),
-            ],
-            
             'ssl' => [
                 'is_enabled' => env('RABBITEVENTS_SSL_ENABLED', false),
                 'verify_peer' => env('RABBITEVENTS_SSL_VERIFY_PEER', true),
@@ -115,6 +103,13 @@ return [
             ],
         ],
     ],
+
+    // Move messages that failed all tries to `{queue}.failed` instead of dropping them.
+    'failed_queue' => [
+        'enabled' => env('RABBITEVENTS_FAILED_QUEUE_ENABLED', true),
+    ],
+
+
     'logging' => [
         'enabled' => env('RABBITEVENTS_LOG_ENABLED', false),
         'level' => env('RABBITEVENTS_LOG_LEVEL', 'info'),
@@ -124,6 +119,15 @@ return [
 ```
 
 ## Upgrade from 9.x to 10.x<a name="upgrade_9.x-10.x"></a>
+
+### Compatibility With 9.x
+
+10.x and 9.x services can run side by side and be upgraded one by one, with no queue migration:
+
+* Exchanges, queues and delay queues are declared exactly as in 9.x, so 9.x and 10.x workers can even consume the same queue.
+* Messages keep the 9.x format. 10.x only adds the AMQP `message_id` and the `trace_context` property, which 9.x ignores.
+* A message released for retry by one version is handled by the other, with `x-attempts` preserved.
+* A 9.x message that fails in a 10.x worker is moved to `{queue}.failed` and gets a `message_id` there, so it can be retried or deleted by ID.
 
 ### Breaking Changes & Requirements
 
@@ -139,28 +143,34 @@ composer require rabbitevents/rabbitevents:^10.0
 > **Zero Namespace Changes:** The PHP namespace remains `RabbitEvents\...`. You do **not** need to change any `use` statements or event classes in your codebase.
 
 #### 2. PHP 8.2+ and Laravel 11+ Required
-RabbitEvents 10.x requires PHP 8.2 or greater and Laravel 11.0 or greater. Distributed tracing automatically utilizes Laravel's native `Context` facade.
+RabbitEvents 10.x requires PHP 8.2 or greater and Laravel 11.0 or greater. Distributed tracing uses Laravel's native `Context` facade.
 
 #### 3. Return Value of `publish()`
-The `publish()` helper now returns the generated `string` Message ID (UUIDv4) or `null` instead of `void`:
+`publish()` and `Event::publish()` now return the message ID (UUIDv4) instead of `void`. It is `null` for an `afterCommit` event published inside a transaction, because the message is sent only on commit.
 
 ```php
-// In 9.x: returned void
-// In 10.x: returns ?string ($messageId)
 $messageId = publish('user.registered', $payload);
 ```
 
-#### 4. Removed `rabbitevents:restart` Command
-The deprecated `rabbitevents:restart` command has been removed. Use your process supervisor (Supervisor, Kubernetes, Docker) to restart listener workers gracefully.
+#### 4. Failed Messages Are Kept
+In 9.x a message that failed all its tries was dropped. 10.x moves it to `{queue}.failed`. Set `RABBITEVENTS_FAILED_QUEUE_ENABLED=false` to keep the 9.x behaviour.
+
+#### 5. Contracts for Custom Transports
+* `Contracts\Connection` requires `makeFailedQueue(string $queueName): FailedDestination`, declaring the failed queue of `$queueName`.
+* `Contracts\QueueConsumer` requires `requeue(array $messages)`, which returns messages to the queue keeping their order.
+* `Contracts\TransportMessage` requires `setRoutingKey()`, `getMessageId()` and `setMessageId()`.
+* A producer that can delay a delivery implements `Contracts\DelaysDelivery`; listener retries of other producers are sent right away.
 
 ---
 
 ### What's New in 10.0
 
-* **Out-of-the-Box Deduplication:** Automatically drops duplicate messages using an in-memory ring buffer (`InMemoryDeduplicator`) without needing MySQL or Redis.
-* **Dead Letter Queue (DLQ) & CLI Management:** Failed messages sitting in `{queue}.failed` can be inspected and managed with `php artisan rabbitevents:failed`, `retry`, `forget`, and `flush`.
-* **Transactional Publishing (`afterCommit`):** Publish events only after database transactions commit via `ShouldPublishAfterCommit` or `$afterCommit = true`.
-* **Distributed Tracing:** Seamlessly propagates Laravel 11 `Context` data across services via `trace_context` headers.
+* **Failed message management:** Messages that failed all tries are kept in `{queue}.failed` and managed with `rabbitevents:failed`, `retry`, `forget` and `flush`.
+* **Message IDs:** Every published message has a UUID, returned by `publish()` and shown in listener logs.
+* **Transactional publishing:** Publish events only after the database transaction commits, via `ShouldPublishAfterCommit` or `->afterCommit()`.
+* **Distributed tracing:** Laravel `Context` is propagated from publishers to listeners.
+* **Deduplication hook:** `Listener\Contracts\Deduplicator`, implemented by the optional [`rabbitevents/deduplication`](https://github.com/rabbitevents/deduplication) package.
+* **Onion-style listener middleware** with `$next`, and new testing assertions (`assertPublishedTimes()`, `assertNothingPublished()`).
 
 ---
 
@@ -172,8 +182,6 @@ The deprecated `rabbitevents:restart` command has been removed. Use your process
 The quickest way to dispatch an event from anywhere in your application:
 
 ```php
-use function RabbitEvents\Publisher\publish;
-
 $messageId = publish('user.registered', [
     'user_id' => 123,
     'email' => 'alex@example.com',
@@ -219,8 +227,7 @@ class UserRegistered implements ShouldPublish
 Dispatch it just like standard Laravel events:
 
 ```php
-UserRegistered::publish($user);
-// or: event(new UserRegistered($user));
+$messageId = UserRegistered::publish($user);
 ```
 
 ---
@@ -252,7 +259,7 @@ class SendWelcomeEmail
 Register listeners explicitly in `app/Providers/RabbitEventsServiceProvider.php`:
 
 ```php
-protected $listen = [
+protected array $listen = [
     'user.registered' => [
         \App\Listeners\SendWelcomeEmail::class,
     ],
@@ -266,13 +273,14 @@ protected $listen = [
 Run the listener worker from your terminal or process manager (Supervisor, Docker, Kubernetes):
 
 ```bash
-php artisan rabbitevents:listen --events=user.registered
+php artisan rabbitevents:listen user.registered
 ```
 
-Or listen to multiple events or wildcard patterns:
+Or listen to several events, or to all registered events when none are given:
 
 ```bash
-php artisan rabbitevents:listen --events="user.*,order.completed"
+php artisan rabbitevents:listen user.registered,order.completed
+php artisan rabbitevents:listen
 ```
 
 ---
@@ -295,59 +303,33 @@ Listener worker console logs display the message ID and execution time in real-t
 [3fa85f64-5717-4562-b3fc-2c963f66afa6] Processed:  payment.processed - App\Listeners\HandlePayment (14.22ms)
 ```
 
-### Idempotency & Deduplication<a name="deduplication"></a>
-In distributed systems, network retries can cause duplicate message deliveries. RabbitEvents prevents duplicate execution:
+### Failed Messages<a name="failed-messages"></a>
+When a listener exhausts its tries (`--tries=3`), times out, or throws `FailedException`, RabbitEvents moves the message to the `{queue}.failed` queue instead of dropping it.
 
-* **In-Memory Ring Buffer (Default)**: Automatically remembers the last `N` processed message IDs in the current worker process's memory. Requires **zero** dependencies. Note: Because it is per-process and lost on worker restart, it protects against redelivery to the same worker after all listeners have succeeded. For cross-worker or persistent deduplication, use the RabbitMQ plugin or ensure your listeners are idempotent.
-* **RabbitMQ Message Deduplication Plugin**: For broker-level deduplication across multiple horizontally scaled workers using the [rabbitmq-message-deduplication](https://github.com/noxdafox/rabbitmq-message-deduplication) plugin.
-
-Configure in `config/rabbitevents.php`:
-```php
-'deduplication' => [
-    'enabled' => true,
-    'strategy' => \RabbitEvents\Foundation\Deduplication\InMemoryDeduplicator::class,
-    'cache_size' => 10000,
-],
-```
-
-### Dead Letter Queue (DLQ) & Failed Message Management<a name="dead-letter-queue"></a>
-When an event listener fails and exhausts all retry attempts (`--tries=3`), RabbitEvents automatically stores the message in `{queue}.failed`.
-
-The failed message retains its original payload, routing key, timestamp, and diagnostic headers (`x-exception-message`, `x-exception-class`, `x-exception-trace`, `x-failed-at`, `x-original-routing-key`, `x-listener`, `trace_context`).
-
-You can inspect and manage failed messages with built-in Artisan commands:
+The failed message keeps its payload, `message_id` and `trace_context`, and gets the properties `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` and `x-listener`. Listeners that already succeeded are recorded in `x-succeeded-listeners` and skipped on retry.
 
 ```bash
-# List all failed messages
+# List failed messages, for all registered events or a given scope
 php artisan rabbitevents:failed
-# Or target a specific queue or registered events
 php artisan rabbitevents:failed --events="user.registered,order.*"
 php artisan rabbitevents:failed --queue=my-custom-queue
 
-# Retry a specific failed event by its ID
+# Move a failed message, or all of them, back to the original queue
 php artisan rabbitevents:retry 3fa85f64-5717-4562-b3fc-2c963f66afa6
-# Or retry within a specific queue/event scope
-php artisan rabbitevents:retry 3fa85f64-5717-4562-b3fc-2c963f66afa6 --events="user.registered"
-
-# Retry all failed events
-php artisan rabbitevents:retry --all
 php artisan rabbitevents:retry --all --events="user.registered"
 
-# Delete a failed message from the failed queue
+# Delete one failed message, or all of them
 php artisan rabbitevents:forget 3fa85f64-5717-4562-b3fc-2c963f66afa6
-
-# Flush (purge) all messages from the failed queue
 php artisan rabbitevents:flush
 ```
 
-> [!TIP]
-> **Zero-Downtime Coexistence with RabbitEvents 9.x**
-> Existing queues declared under RabbitEvents 9.x continue working seamlessly without requiring manual queue deletion or migration. Dead-letter routing publishes failed messages directly to `rabbitevents.dlx` (`{queue}.failed`) without mutating existing worker queue arguments.
-> Note: `rabbitevents:failed`, `rabbitevents:retry <id>`, and `rabbitevents:forget <id>` scan up to 10,000 messages in `{queue}.failed` by default (while holding scanned unacknowledged messages in memory until the command finishes). Use `rabbitevents:retry --all` or `rabbitevents:flush` to process the entire failed queue without a scan limit.
+See the [Listener documentation](./src/RabbitEvents/Listener/README.md#failed-messages) for details.
 
+### Deduplication<a name="deduplication"></a>
+RabbitMQ delivers a message *at least once*: when the acknowledgement doesn't reach it (lost connection, killed worker), it delivers the message again. RabbitEvents relies on RabbitMQ only and doesn't deduplicate such redeliveries, so listeners should be idempotent. If your service has a cache store shared by its workers, the optional [`rabbitevents/deduplication`](https://github.com/rabbitevents/deduplication) package skips messages redelivered after they were handled. See the [Listener documentation](./src/RabbitEvents/Listener/README.md#deduplication).
 
 ### Transactional Publishing (`afterCommit`)<a name="transactional-publishing"></a>
-Prevent race conditions by ensuring events are published only after database transactions commit. You can implement `ShouldPublishAfterCommit`, set `$afterCommit = true`, or call `->afterCommit()`:
+Prevent race conditions by ensuring events are published only after database transactions commit. You can implement `ShouldPublishAfterCommit` or call `->afterCommit()`:
 
 ```php
 use RabbitEvents\Publisher\ShouldPublish;
@@ -360,23 +342,20 @@ class InvoicePaid implements ShouldPublishAfterCommit
     use Publishable;
 }
 
-// Option 2: Property or method via Publishable trait
-class OrderShipped implements ShouldPublish
-{
-    use Publishable;
-
-    public bool $afterCommit = true;
-}
+// Option 2: Per publish, via the Publishable trait
+publish((new OrderShipped($order))->afterCommit());
 ```
 
+> The `$afterCommit` property is declared by the `Publishable` trait, so don't redeclare it in your event class: PHP rejects a trait property redeclared with a different default.
+
 ### Distributed Tracing & Context Propagation<a name="distributed-tracing"></a>
-Laravel 11+ `Context` data is automatically serialized into AMQP `trace_context` headers on publish and hydrated on the listener side, allowing seamless distributed tracing:
+Laravel `Context` data is sent with each message in the `trace_context` property and added to the listener's `Context` while the message is handled:
 
 ```php
 use Illuminate\Support\Facades\Context;
 
 // In Service A:
-Context::add('trace_id', (string) Str::uuid());
+Context::add('trace_id', (string) \Illuminate\Support\Str::uuid());
 publish('order.created', $orderData);
 
 // In Service B (Listener):
@@ -411,13 +390,14 @@ You can implement your own serializer by implementing `RabbitEvents\Foundation\C
 use RabbitEvents\Foundation\Contracts\Serializer;
 use RabbitEvents\Foundation\Contracts\ContentType;
 use RabbitEvents\Foundation\Contracts\Payload;
+use RabbitEvents\Foundation\Contracts\TransportMessage;
 
 class MySerializer implements Serializer
 {
-    public function serialize($data): Payload { ... }
-    public function deserialize($message): Payload { ... }
+    public function serialize(mixed $payload): Payload { ... }
+    public function deserialize(TransportMessage $message): Payload { ... }
     public function contentType(): ContentType { return new MyContentType(); }
-    public function canSerialize($payload): bool { ... }
+    public function canSerialize(mixed $payload): bool { ... }
 }
 ```
 
@@ -433,6 +413,7 @@ New serializers are prepended to the registry, so they can override default beha
 ## Extensions & Ecosystem<a name="extensions"></a>
 
 - [Redis Streams Transport](https://github.com/rabbitevents/redis-transport) - Redis Streams transport driver for RabbitEvents.
+- [Deduplication](https://github.com/rabbitevents/deduplication) - Skips redelivered messages using a Laravel cache store shared by the workers.
 - [Symfony Bundle](https://github.com/rabbitevents/symfony-bundle) - Official Symfony integration bundle for RabbitEvents.
 - [Protobuf Support](https://github.com/rabbitevents/protobuf) - Official Google Protobuf serialization support for RabbitEvents. Required for using Protobuf messages.
 
@@ -442,12 +423,12 @@ Practical implementation examples and ready-to-use boilerplate classes are avail
 
 - **Publishers:**
   - [`UserCreated.php`](./examples/UserCreated.php) - Standard publishable event with payload mapping and publishing helper.
-  - [`TransactionalEvent.php`](./examples/TransactionalEvent.php) - Transaction-safe event published only after DB commits (`$afterCommit = true`).
+  - [`TransactionalEvent.php`](./examples/TransactionalEvent.php) - Transaction-safe event published only after DB commits (`ShouldPublishAfterCommit`).
   - [`ContextTracingEvent.php`](./examples/ContextTracingEvent.php) - Distributed tracing via Laravel `Context` and capturing the returned message ID.
 - **Listeners & Subscribers:**
   - [`AttributeListener.php`](./examples/AttributeListener.php) - Clean attribute-based listener with `#[Listener]`.
   - [`OrderEventsSubscriber.php`](./examples/OrderEventsSubscriber.php) - Handling multiple domain events within a single subscriber class.
-  - [`IdempotentPaymentListener.php`](./examples/IdempotentPaymentListener.php) - Safe, idempotent processing and trace ID extraction.
+  - [`IdempotentPaymentListener.php`](./examples/IdempotentPaymentListener.php) - Idempotent processing guarded by a business key, and trace ID extraction.
   - [`WildcardListener.php`](./examples/WildcardListener.php) - Wildcard event pattern matching and conditional propagation.
   - [`Listener.php`](./examples/Listener.php) - Standard listener with a custom middleware stack.
 - **Configuration & Providers:**
@@ -482,7 +463,7 @@ There is the `PublishableEventTesting` trait that provides assertion methods in 
 ```php
 <?php
 
-namespace App\BroadcastEvents;
+namespace App\RabbitEvents;
 
 use RabbitEvents\Publisher\ShouldPublish;
 use RabbitEvents\Publisher\Support\Publishable;
@@ -534,10 +515,19 @@ Event::assertPublishedTimes(1);
 
 // Assert an event was not published
 AnotherEvent::assertNotPublished();
+```
 
-// Assert nothing was published
+`assertNothingPublished()` checks that no event was published at all:
+
+```php
+Event::fake();
+
+$service->doNothingInteresting();
+
 Event::assertNothingPublished();
 ```
+
+`fake()` records events instead of sending them, returns a message ID from `publish()` like the real publisher, and keeps the `afterCommit` behaviour: an event published inside a transaction is recorded only when the transaction commits.
 
 Don't forget to call `\Mockery::close()` in `tearDown` or similar methods of your tests.
 

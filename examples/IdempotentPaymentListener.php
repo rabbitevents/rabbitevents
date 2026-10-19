@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace App\Listeners;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Log;
 use RabbitEvents\Listener\Attributes\Listener;
 
 /**
- * Example of an idempotent listener processing events safely.
- * Notice that RabbitEvents automatically deduplicates events using InMemoryDeduplicator
- * or the RabbitMQ plugin, and hydrates distributed tracing Context.
+ * Example of an idempotent listener.
+ * RabbitMQ delivers a message at least once, so the same payment can arrive twice
+ * (e.g. the worker died before acknowledging it). The listener guards itself with a business key.
+ * Context propagated from the publisher is available via the Context facade.
  */
 #[Listener('payment.received')]
 class IdempotentPaymentListener
@@ -32,8 +34,11 @@ class IdempotentPaymentListener
             'amount' => $payload['amount'] ?? 0,
         ]);
 
-        // Process payment safely (e.g. update balance, send receipt):
-        // If the same event arrives again due to network retry,
-        // RabbitEvents deduplication automatically discards it.
+        // Cache::add() is atomic: only the first delivery of this payment gets past it.
+        if (!Cache::add("payments:processed:{$payload['payment_id']}", true, now()->addDay())) {
+            return;
+        }
+
+        // Process the payment (update balance, send receipt, ...)
     }
 }

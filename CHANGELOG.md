@@ -4,60 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [10.0.0]
 
+10.x interoperates with 9.x on the wire: services can be upgraded one by one, and 9.x and 10.x workers can share queues. No queue migration is needed.
+
 ### Added
-- **Dead Letter Exchange (DLX) & Failed Messages Management**:
-    - `DeadLetterConfigurator`: automatically creates `rabbitevents.dlx` topic exchange and declares and binds `{$queue}.failed` queue without mutating existing worker queue arguments.
-    - `rabbitevents:failed`: Artisan command to inspect and list failed messages from the DLX queue with routing key, failed time, and exception details.
-    - `rabbitevents:retry`: Artisan command to re-queue failed messages back into the original working queue and acknowledge them from the failed queue (`{id}` or `--all`).
-    - `rabbitevents:forget`: Artisan command to remove a specific failed message from the failed queue.
-    - `rabbitevents:flush`: Artisan command to delete all failed messages from the failed queue.
-- **Message Deduplication**:
-    - `Contracts\Deduplicator` interface for deduplication strategies.
-    - Built-in deduplicators: `InMemoryDeduplicator`, `NullDeduplicator`, and `RabbitMqDeduplicationPluginStrategy` (for `rabbitmq-message-deduplication` plugin).
-    - Automatic `x-deduplication-header` header injection on published messages.
-    - Integrated deduplication verification in `Processor::process()` to prevent duplicate event executions.
-- **Context Tracing (Laravel Context)**:
-    - Automatic injection of `Illuminate\Support\Facades\Context::all()` into message headers (`trace_context`) on publishing.
-    - Automatic restoration of trace context in `Processor::withContext()` during listener handling, with guaranteed `Context::flush()` on finish.
-- **Transactional Publishing**:
-    - `ShouldPublishAfterCommit` interface and `$afterCommit` property / `afterCommit()` method on `Publishable` trait to delay event publishing until the database transaction successfully commits.
-    - Prevents publishing if the transaction is rolled back.
-- **Testing Utilities**:
-    - `PublishableEventTesting` trait providing `Event::fake()`, `Event::assertPublished()`, `Event::assertPublishedTimes(n)`, `Event::assertNotPublished()`, and `Event::assertNothingPublished()`.
-- **Reference Implementations**:
-    - Added runnable examples in `examples/` for Context Tracing, Idempotent Listeners, Transactional Events, and Subscribers.
+- **Failed messages**: a message that failed all tries, timed out or threw `FailedException` is moved to `{queue}.failed` instead of being dropped (`rabbitevents.failed_queue.enabled`, default `true`). It gets the properties `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` (cut to 4 KB) and `x-listener`. A message without ID (published by 9.x) gets one.
+- **Failed message commands**: `rabbitevents:failed`, `rabbitevents:retry {id|--all}`, `rabbitevents:forget {id}` and `rabbitevents:flush`, with `--events`, `--queue`, `--service` and `--connection` options.
+- **Succeeded listeners tracking**: listeners that already succeeded on a message are recorded in `x-succeeded-listeners` and skipped on retry.
+- **Interrupted messages are not lost**: if processing throws outside the listeners, the worker no longer acknowledges the message. It releases it like a failed listener does (`Releaser::release()`, keeping `x-succeeded-listeners`), or returns the original to the queue if releasing fails. In 9.x such a message was acknowledged and lost.
+- **Message IDs**: every published message gets a UUID `message_id`. `Message::id()` returns it; listener logs show it together with the handling duration (`ListenerHandled::$duration`).
+- **Transactional publishing**: `ShouldPublishAfterCommit` interface and `Publishable::afterCommit()` publish the event only after the database transaction commits.
+- **Context propagation**: Laravel `Context::all()` is sent in the `trace_context` property (objects converted to AMQP-safe values) and added to the listener's `Context` while the message is handled.
+- **Deduplication hook**: `Listener\Contracts\Deduplicator` (`isDuplicate()` / `markHandled()` per queue), bound to `NullDeduplicator`. The optional `rabbitevents/deduplication` package implements it with a shared Laravel cache store; the core needs no storage besides RabbitMQ.
+- **Onion-style listener middleware** receiving `$next`.
+- **Testing**: `assertPublishedTimes()`, `assertNothingPublished()`, and closure matchers in `assertPublished()` / `assertNotPublished()`. `fake()` returns a message ID and respects `afterCommit` (events of rolled back transactions are not recorded).
+- `QueueArgumentsMismatchException` with remediation steps when RabbitMQ refuses to redeclare a queue (406 `PRECONDITION_FAILED`).
+- Examples in `examples/`.
 
 ### Changed
-- **Package Namespace Migration**: Renamed package to `rabbitevents/rabbitevents` (maintaining backward-compatible `"replace"` for `nuwber/rabbitevents`). PHP namespaces (`RabbitEvents\...`) remain identical.
-- **Framework Compatibility**: Added full support for Laravel 11.x, 12.x, and 13.x on PHP 8.2 – 8.4.
-- **Publishing Return Value**: `publish()` helper and `Publishable::publish()` now return the generated message UUID (`?string`) instead of `void`.
-- **Transport & Message Architecture**:
-    - `Contracts\TransportMessage` extended with `getMessageId()`, `setMessageId()`, `getHeader()`, `getHeaders()`, `setHeader()`, `setHeaders()`, and `setRoutingKey()`.
-    - `AmqpTransportMessage` unifies AMQP application headers and basic properties.
-    - `Message` class decoupled from direct `Interop\Amqp\AmqpMessage` dependency, now wrapping `Contracts\TransportMessage`.
-    - Added unified header accessors: `header()`, `headers()`, and `setHeader()`.
-    - Added `id()`, `attempts()`, `increaseAttempts()`, and `hasFailed()` methods.
-- **JsonPayload**: Now implements `\JsonSerializable` for seamless serialization with `json_encode()`.
-- **Queue Declarations & Seamless 9.x Coexistence**:
-    - `QueueFactory` and `DeadLetterConfigurator` automatically configure `rabbitevents.dlx` and `{queue}.failed` bindings when DLX is enabled without adding conflicting queue arguments to existing 9.x queues.
-    - `Failer`: Worker routes failed messages with diagnostic headers (`x-exception-message`, `x-exception-class`, `x-exception-trace`, `x-failed-at`, `x-original-routing-key`, `x-listener`, `trace_context`) into `rabbitevents.dlx` exchange, delivering to `{queue}.failed` reliably.
-- **Failed Queue Commands Overhaul**:
-    - `InteractsWithFailedQueue`: Fixed browsing loop to keep messages unacknowledged during iteration and only requeue unhandled messages upon completion, preventing infinite single-message requeue loops on RabbitMQ.
-    - Added `--queue` and `--events` options to `rabbitevents:failed`, `rabbitevents:retry`, `rabbitevents:forget`, and `rabbitevents:flush` for precise queue targeting.
-- **Context Tracing & Safety**:
-    - Sanitizes non-scalar objects in Laravel `Context` before attaching to AMQP headers to avoid AMQPTable serialization exceptions.
-    - Preserves worker-level Context data across message processing without clearing out the parent worker context.
-- **Performance & Reliability**:
-    - Restored `delay_strategy` configuration in `config/rabbitevents.php`.
-    - Restored `$message->event()` accessor on `Message` for backward compatibility.
-    - Cached reflection checks in `Dispatcher` for listener middleware execution.
-    - Captured synchronous message ID when publishing events configured with `afterCommit` outside of active database transactions.
-    - Added explicit `illuminate/log` dependency in `composer.json`.
-- **Worker & Processor**: Integrated deduplication checks and trace context lifecycle into message processing loop.
-- **CI & Quality**: Replaced external Codecov service with native GitHub Actions test and coverage reporting (`$GITHUB_STEP_SUMMARY`).
+- **Package name**: `rabbitevents/rabbitevents` (it `replace`s `nuwber/rabbitevents`). PHP namespaces are unchanged.
+- **Requirements**: PHP 8.2+, Laravel 11, 12 or 13.
+- `publish()` and `Publishable::publish()` return the message ID (`?string`) instead of `void`. It is `null` for an `afterCommit` event published inside a transaction.
+- Published messages are persistent (`delivery_mode = 2`).
+- `Contracts\Connection` requires `makeFailedQueue(string $queueName): FailedDestination`. `Contracts\FailedDestination` marks a failed queue by type and knows its original queue; `Failer` accepts only a `FailedDestination`.
+- `Contracts\QueueConsumer` requires `requeue(array $messages)` (order-preserving return to the queue).
+- `Releaser` delays retries only through producers implementing `Contracts\DelaysDelivery` (`AmqpProducerAdapter` does); before, a producer without `setDeliveryDelay()` made every delayed retry fail.
+- `Contracts\TransportMessage` requires `setRoutingKey()`, `getMessageId()` and `setMessageId()`.
+- `JsonPayload` implements `\JsonSerializable`.
 
 ### Removed
-- Obsolete `bin/splitsh-lite` binaries.
+- `bin/` release and split scripts.
 
 ## [9.0.0]
 
