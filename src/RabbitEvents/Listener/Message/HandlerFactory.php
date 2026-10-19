@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Message;
 
 use Illuminate\Contracts\Container\Container;
-use RabbitEvents\Foundation\Contracts\Transport;
 use RabbitEvents\Foundation\Message;
+use RabbitEvents\Listener\Support\Releaser;
 
 class HandlerFactory
 {
     public function __construct(
         private Container $container,
-        private Transport $transport
+        private Releaser $releaser
     ) {
     }
 
@@ -32,7 +32,7 @@ class HandlerFactory
             $message,
             $callback,
             $listenerClass,
-            $this->transport,
+            $this->releaser,
             $failedCallback
         );
     }

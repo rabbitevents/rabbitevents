@@ -20,7 +20,7 @@ class HandlerFactoryTest extends TestCase
         $container = m::mock(Container::class);
         $container->shouldReceive('make')->with('ClassName')->andReturn(new \stdClass());
 
-        $factory = new HandlerFactory($container, m::mock(Transport::class));
+        $factory = new HandlerFactory($container, m::mock(\RabbitEvents\Listener\Support\Releaser::class));
         $handler = $factory->make($message, static function() {}, 'ClassName');
 
         self::assertInstanceOf(Handler::class, $handler);

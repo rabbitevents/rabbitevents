@@ -7,6 +7,8 @@ namespace RabbitEvents\Foundation\Amqp;
 use Interop\Amqp\AmqpContext;
 use Interop\Amqp\AmqpDestination;
 use Interop\Amqp\AmqpQueue;
+use PhpAmqpLib\Exception\AMQPProtocolChannelException;
+use RabbitEvents\Foundation\Exceptions\QueueArgumentsMismatchException;
 
 class QueueFactory
 {
@@ -26,13 +28,15 @@ class QueueFactory
             $queue->addFlag(AmqpDestination::FLAG_DURABLE);
         }
 
-        (new DeadLetterConfigurator($this->context, $this->connection))->configure($queue, $queueName);
+        try {
+            $this->context->declareQueue($queue);
+        } catch (AMQPProtocolChannelException $e) {
+            if ($e->getCode() === 406) {
+                throw new QueueArgumentsMismatchException($queueName, $e);
+            }
 
-        if (!str_ends_with($queueName, '.failed')) {
-            $this->connection->getDeduplicationStrategy()->prepareQueue($queue);
+            throw $e;
         }
-
-        $this->context->declareQueue($queue);
 
         return $queue;
     }

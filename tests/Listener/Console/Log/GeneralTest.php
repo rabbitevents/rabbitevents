@@ -80,7 +80,7 @@ class GeneralTest extends TestCase
             $message,
             static fn($event, $payload) => $event,
             'ListenerClass',
-            m::mock(Transport::class)
+            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
         );
     }
 }

@@ -16,9 +16,9 @@ class Context
     ) {
     }
 
-    public function makeTopic(?string $name = null): Destination
+    public function makeTopic(): Destination
     {
-        return $this->connection->makeTopic($name);
+        return $this->connection->makeTopic();
     }
 
     public function createProducer(): Producer
@@ -39,9 +39,8 @@ class Context
         return $this->connection->makeQueue($queueName, $events, $topic);
     }
 
-    public function getDeduplicator(): Contracts\Deduplicator
+    public function makeFailedQueue(string $queueName): Contracts\FailedDestination
     {
-        return $this->connection->getDeduplicationStrategy()
-            ?? new Deduplication\NullDeduplicator();
+        return $this->connection->makeFailedQueue($queueName);
     }
 }

@@ -36,7 +36,7 @@ class HandlerTest extends TestCase
             $this->getMessage(),
             static fn($event, $payload) => $event,
             $this->listenerClass,
-            m::mock(Transport::class)
+            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
         );
 
         self::assertEquals("{$this->event}:{$this->listenerClass}", $handler->getName());
@@ -70,7 +70,7 @@ class HandlerTest extends TestCase
 
         $listener = new FailingListener();
         $message = $this->getMessage();
-        $transport = m::spy(Transport::class);
+        $transport = m::spy(\RabbitEvents\Listener\Support\Releaser::class);
 
         $handler = new Handler($message, static fn($event, $payload) => $event, FailingListener::class, $transport, [$listener, 'failed']);
 
@@ -101,36 +101,14 @@ class HandlerTest extends TestCase
             new Message('some.event', new Payload([])),
             static fn($event, $payload) => $event,
             $this->listenerClass,
-            $transport = m::spy(Transport::class)
+            $transport = m::spy(\RabbitEvents\Listener\Support\Releaser::class)
         );
 
         $handler->release(10);
 
-        $transport->shouldHaveReceived()
-            ->send(m::type(Message::class));
+        $transport->shouldHaveReceived()->release(m::type(Message::class), 10);
 
         self::assertTrue($handler->isReleased());
-    }
-
-    public function testReleaseRegeneratesDeduplicationHeader(): void
-    {
-        $message = $this->getMessage();
-        $message->setHeader('x-deduplication-header', 'old-uuid');
-
-        $transport = m::spy(Transport::class);
-        $handler = new Handler(
-            $message,
-            static fn($event, $payload) => $event,
-            $this->listenerClass,
-            $transport
-        );
-
-        $handler->release(5);
-
-        $transport->shouldHaveReceived('send', function (Message $retryMessage) {
-            return $retryMessage->header('x-deduplication-header') !== 'old-uuid'
-                && !empty($retryMessage->header('x-deduplication-header'));
-        });
     }
 
     public function testGetAttempts()
@@ -139,7 +117,7 @@ class HandlerTest extends TestCase
             $this->getMessage()->increaseAttempts(),
             static fn($event, $payload) => $event,
             $this->listenerClass,
-            m::mock(Transport::class)
+            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
         );
 
         self::assertEquals(1, $handler->attempts());
@@ -156,7 +134,7 @@ class HandlerTest extends TestCase
             $this->getMessage(),
             $callback ?: static fn($event, $payload) => $event,
             $listenerClass ?: $this->listenerClass,
-            m::spy(Transport::class)
+            m::spy(\RabbitEvents\Listener\Support\Releaser::class)
         );
     }
 }

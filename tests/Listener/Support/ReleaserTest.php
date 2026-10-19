@@ -55,4 +55,17 @@ class ReleaserTest extends TestCase
 
         self::assertCount(1, $producer->sent);
     }
+
+    public function testReleaseSendsTheMessageWithItsProgressAndMarksItReleased(): void
+    {
+        $this->message->setProperty('x-succeeded-listeners', ['App\\Listeners\\First']);
+        $releaser = new Releaser($this->queueStub, $this->producerStub);
+
+        $releaser->release($this->message, 3);
+
+        self::assertSame(3, $this->producerStub->deliveryDelay);
+        self::assertSame($this->message->transportMessage(), $this->producerStub->sent[0]['message']);
+        self::assertSame(['App\\Listeners\\First'], $this->producerStub->sent[0]['message']->getProperty('x-succeeded-listeners'));
+        self::assertTrue($this->message->isReleased());
+    }
 }

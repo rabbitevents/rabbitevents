@@ -6,9 +6,7 @@ namespace RabbitEvents\Listener\Message;
 
 
 use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
-use RabbitEvents\Foundation\Contracts\DelaysDelivery;
-use RabbitEvents\Foundation\Contracts\Transport;
+use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Foundation\Message;
 use Throwable;
 
@@ -32,7 +30,7 @@ class Handler
         public readonly Message $message,
         private \Closure $listener,
         protected string $listenerClass,
-        private Transport $transport,
+        private Releaser $releaser,
         private mixed $failedCallback = null
     ) {
     }
@@ -94,18 +92,7 @@ class Handler
      */
     public function release(int $delay = 0): void
     {
-        if ($this->transport instanceof DelaysDelivery) {
-            $this->transport->setDelay($delay);
-        }
-
-        $retryMessage = Message::createFromTransportMessage($this->message->transportMessage());
-        $retryMessage->transportMessage()->setProperty('event', $this->message->event);
-
-        if ($retryMessage->header('x-deduplication-header')) {
-            $retryMessage->setHeader('x-deduplication-header', (string) Str::uuid());
-        }
-
-        $this->transport->send($retryMessage);
+        $this->releaser->release($this->message, $delay);
 
         $this->released = true;
     }

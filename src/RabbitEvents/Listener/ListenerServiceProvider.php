@@ -122,6 +122,8 @@ class ListenerServiceProvider extends BaseServiceProvider
     {
         $this->app->singleton(Dispatcher::class);
         $this->app->alias(Dispatcher::class, 'rabbitevents.events');
+        // Deduplication needs a store shared by the workers; the rabbitevents/deduplication package provides one.
+        $this->app->bindIf(Contracts\Deduplicator::class, Deduplication\NullDeduplicator::class);
         $this->registerPublishing();
     }
 

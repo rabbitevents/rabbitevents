@@ -13,6 +13,10 @@ class AmqpMessageFactory implements TransportMessageFactory
 {
     public function make(string $event, Payload $payload, array $properties = []): TransportMessage
     {
+        // message_id is an AMQP basic property, not an application header.
+        $messageId = $properties['message_id'] ?? null;
+        unset($properties['message_id']);
+
         $message = new AmqpMessage(
             $payload->serialize(),
             array_merge($properties, [
@@ -23,14 +27,8 @@ class AmqpMessageFactory implements TransportMessageFactory
         $message->setRoutingKey($event);
         $message->setProperty('event', $event);
 
-        if (!empty($properties['headers']) && is_array($properties['headers'])) {
-            foreach ($properties['headers'] as $headerKey => $headerVal) {
-                $message->setProperty((string) $headerKey, $headerVal);
-            }
-        }
-
-        if (!empty($properties['message_id'])) {
-            $message->setMessageId((string) $properties['message_id']);
+        if ($messageId) {
+            $message->setMessageId((string) $messageId);
         }
 
         $message->setDeliveryMode(AmqpMessage::DELIVERY_MODE_PERSISTENT);

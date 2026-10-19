@@ -8,6 +8,7 @@ use Illuminate\Support\Carbon;
 use RabbitEvents\Foundation\Connection\ConnectionManager;
 use RabbitEvents\Foundation\Consumer;
 use RabbitEvents\Foundation\Context;
+use RabbitEvents\Foundation\Contracts\FailedDestination;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Dispatcher;
 use RabbitEvents\Listener\QueueName;
@@ -16,23 +17,24 @@ trait InteractsWithFailedQueue
 {
     protected function getFailedQueueName(): string
     {
-        $queue = (string) $this->option('queue');
+        return $this->resolveOriginalQueueName() . FailedDestination::SUFFIX;
+    }
 
-        if (!$queue) {
-            $service = (string) ($this->option('service') ?: ($this->laravel['config']->get('app.name') ?: 'rabbitevents'));
-            $eventsInput = null;
-            if ($this->hasOption('events') && $this->option('events')) {
-                $eventsInput = (string) $this->option('events');
-            } elseif ($this->hasArgument('events') && $this->argument('events')) {
-                $eventsInput = (string) $this->argument('events');
-            }
-            $events = $eventsInput
-                ? explode(',', $eventsInput)
-                : ($this->laravel->bound(Dispatcher::class) ? $this->laravel[Dispatcher::class]->getEvents() : []);
-            $queue = QueueName::resolve($service, $events);
+    protected function resolveOriginalQueueName(): string
+    {
+        if ($queue = (string) $this->option('queue')) {
+            // Accept both the original queue name and the failed queue name typed by the user.
+            return str_ends_with($queue, FailedDestination::SUFFIX)
+                ? substr($queue, 0, -strlen(FailedDestination::SUFFIX))
+                : $queue;
         }
 
-        return str_ends_with($queue, '.failed') ? $queue : "{$queue}.failed";
+        $service = (string) ($this->option('service') ?: ($this->laravel['config']->get('app.name') ?: 'rabbitevents'));
+        $events = $this->option('events')
+            ? explode(',', (string) $this->option('events'))
+            : ($this->laravel->bound(Dispatcher::class) ? $this->laravel[Dispatcher::class]->getEvents() : []);
+
+        return QueueName::resolve($service, $events);
     }
 
     protected function getContext(): Context
@@ -46,18 +48,16 @@ trait InteractsWithFailedQueue
         return $this->laravel->make(Context::class);
     }
 
-    protected function getConsumer(Context $context, string $queueName): Consumer
-    {
-        $destination = $context->makeQueue($queueName, [], $context->makeTopic());
-
-        return $context->makeConsumer($destination);
-    }
-
+    /**
+     * @param callable(Message, Consumer, Context, FailedDestination): (bool|null) $callback Return false to stop.
+     */
     protected function eachFailedMessage(callable $callback, int $timeout = 500, int $maxScan = 10000): void
     {
         $context = $this->getContext();
-        $consumer = $this->getConsumer($context, $this->getFailedQueueName());
+        $failedQueue = $context->makeFailedQueue($this->resolveOriginalQueueName());
+        $consumer = $context->makeConsumer($failedQueue);
         $unhandled = [];
+        $seen = [];
         $scanned = 0;
 
         if ($this->hasOption('limit') && (int) $this->option('limit') > 0) {
@@ -65,8 +65,18 @@ trait InteractsWithFailedQueue
         }
 
         while ($scanned < $maxScan && ($message = $consumer->nextMessage($timeout))) {
+            // A message seen twice means the scan wrapped around, e.g. a retried message failed again.
+            if ($id = $message->id()) {
+                if (isset($seen[$id])) {
+                    $unhandled[] = $message;
+                    break;
+                }
+
+                $seen[$id] = true;
+            }
+
             $scanned++;
-            $continue = $callback($message, $consumer, $context);
+            $continue = $callback($message, $consumer, $context, $failedQueue);
 
             if (!$message->isAcknowledged()) {
                 $unhandled[] = $message;
@@ -77,25 +87,13 @@ trait InteractsWithFailedQueue
             }
         }
 
-        foreach ($unhandled as $unhandledMessage) {
-            $consumer->reject($unhandledMessage, true);
-        }
+        $consumer->requeue($unhandled);
     }
 
     protected function extractFailedAt(Message $message): string
     {
-        if ($failedAt = $message->header('x-failed-at')) {
+        if ($failedAt = $message->getProperty('x-failed-at')) {
             return Carbon::createFromTimestamp((int) $failedAt)->toDateTimeString();
-        }
-
-        if ($deaths = $message->header('x-death')) {
-            $time = $deaths[0]['time'] ?? null;
-            if ($time instanceof \DateTimeInterface) {
-                return Carbon::instance($time)->toDateTimeString();
-            }
-            if (is_numeric($time)) {
-                return Carbon::createFromTimestamp((int) $time)->toDateTimeString();
-            }
         }
 
         return 'Unknown';
@@ -103,39 +101,14 @@ trait InteractsWithFailedQueue
 
     protected function extractEvent(Message $message): string
     {
-        if ($originalKey = $message->header('x-original-routing-key')) {
-            return $originalKey;
-        }
-
-        if ($deaths = $message->header('x-death')) {
-            $routingKeys = $deaths[0]['routing-keys'] ?? [];
-            if (!empty($routingKeys[0])) {
-                return $routingKeys[0];
-            }
-        }
-
-        return $message->event;
+        return $message->getProperty('x-original-routing-key') ?: $message->event;
     }
 
     protected function extractException(Message $message): string
     {
-        return $message->header('x-exception-message')
-            ?? $message->header('x-exception-class')
+        return $message->getProperty('x-exception-message')
+            ?? $message->getProperty('x-exception-class')
             ?? 'N/A';
     }
 
-    protected function getOriginalQueueName(Message $message): string
-    {
-        if ($deaths = $message->header('x-death')) {
-            if (!empty($deaths[0]['queue'])) {
-                return $deaths[0]['queue'];
-            }
-        }
-
-        $failedQueue = $this->getFailedQueueName();
-
-        return str_ends_with($failedQueue, '.failed')
-            ? substr($failedQueue, 0, -7)
-            : $failedQueue;
-    }
 }

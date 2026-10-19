@@ -34,7 +34,8 @@ class FailedCommandTest extends FailedQueueTestCase
 
         self::assertEquals(0, $result);
         self::assertStringContainsString('uuid-1', $outputContent);
-        self::assertStringContainsString('N/A', $outputContent);
+        // A 9.x message without ID gets one when it is moved to the failed queue.
+        self::assertStringContainsString((string) $msgNull->getMessageId(), $outputContent);
         self::assertStringContainsString('uuid-2', $outputContent);
         self::assertStringContainsString('order.created', $outputContent);
         self::assertStringContainsString('order.updated', $outputContent);
@@ -42,7 +43,9 @@ class FailedCommandTest extends FailedQueueTestCase
         self::assertStringContainsString('Database timeout', $outputContent);
         self::assertStringContainsString('Gateway error', $outputContent);
 
-        self::assertCount(3, $consumer->rejected);
+        self::assertCount(3, $consumer->requeued);
+        // Browsing must not reorder the failed queue.
+        self::assertSame([$msg1, $msgNull, $msg2], $consumer->messages);
         self::assertCount(3, $consumer->messages);
     }
 }

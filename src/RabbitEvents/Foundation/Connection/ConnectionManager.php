@@ -11,6 +11,7 @@ use InvalidArgumentException;
 use RabbitEvents\Foundation\Context;
 use RabbitEvents\Foundation\Contracts\Connection;
 use RabbitEvents\Foundation\Contracts\Destination;
+use RabbitEvents\Foundation\Contracts\FailedDestination;
 use RabbitEvents\Foundation\Contracts\Producer;
 use RabbitEvents\Foundation\Contracts\QueueConsumer;
 use RabbitEvents\Foundation\Serialization\SerializerRegistry;
@@ -169,9 +170,9 @@ class ConnectionManager implements Connection
         return $this->connection()->makeConsumer($queue);
     }
 
-    public function makeTopic(?string $name = null): Destination
+    public function makeTopic(): Destination
     {
-        return $this->connection()->makeTopic($name);
+        return $this->connection()->makeTopic();
     }
 
     public function makeQueue(string $queueName, array $events, Destination $topic): Destination
@@ -179,9 +180,9 @@ class ConnectionManager implements Connection
         return $this->connection()->makeQueue($queueName, $events, $topic);
     }
 
-    public function getDeduplicationStrategy(): ?\RabbitEvents\Foundation\Contracts\Deduplicator
+    public function makeFailedQueue(string $queueName): FailedDestination
     {
-        return $this->connection()->getDeduplicationStrategy();
+        return $this->connection()->makeFailedQueue($queueName);
     }
 
     /**

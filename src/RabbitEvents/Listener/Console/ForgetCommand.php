@@ -17,7 +17,6 @@ class ForgetCommand extends Command
      */
     protected $signature = 'rabbitevents:forget
                             {id : The ID of the failed message to delete}
-                            {events? : The events the queue was listening for}
                             {--events= : The events the queue was listening for}
                             {--queue= : The failed queue name (e.g. service:events.failed)}
                             {--connection= : The connection name}

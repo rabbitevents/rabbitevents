@@ -1,7 +1,6 @@
 <?php
 
 use Enqueue\AmqpTools\RabbitMqDlxDelayStrategy;
-use RabbitEvents\Foundation\Deduplication\InMemoryDeduplicator;
 use RabbitEvents\Foundation\Serialization\JsonSerializer;
 
 return [
@@ -30,15 +29,6 @@ return [
             'pass' => env('RABBITEVENTS_PASSWORD', 'guest'),
             'vhost' => env('RABBITEVENTS_VHOST', 'events'),
             'delay_strategy' => env('RABBITEVENTS_DELAY_STRATEGY', RabbitMqDlxDelayStrategy::class),
-            'deduplication' => [
-                'enabled' => env('RABBITEVENTS_DEDUPLICATION_ENABLED', true),
-                'strategy' => env('RABBITEVENTS_DEDUPLICATION_STRATEGY', InMemoryDeduplicator::class),
-                'cache_size' => env('RABBITEVENTS_DEDUPLICATION_CACHE_SIZE', 10000),
-            ],
-            'dlx' => [
-                'enabled' => env('RABBITEVENTS_DLX_ENABLED', true),
-                'exchange' => env('RABBITEVENTS_DLX_EXCHANGE', 'rabbitevents.dlx'),
-            ],
             'ssl' => [
                 'is_enabled' => env('RABBITEVENTS_SSL_ENABLED', false),
                 'verify_peer' => env('RABBITEVENTS_SSL_VERIFY_PEER', true),
@@ -60,6 +50,22 @@ return [
             ]
         ],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Failed Messages
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, a message that failed all its tries is moved to the
+    | `{queue}.failed` queue, where `rabbitevents:failed`, `retry`, `forget`
+    | and `flush` can manage it. When disabled, failed messages are dropped.
+    |
+    */
+
+    'failed_queue' => [
+        'enabled' => env('RABBITEVENTS_FAILED_QUEUE_ENABLED', true),
+    ],
+
     'logging' => [
         'enabled' => env('RABBITEVENTS_LOG_ENABLED', false),
         'level' => env('RABBITEVENTS_LOG_LEVEL', 'info'),

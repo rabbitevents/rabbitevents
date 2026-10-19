@@ -39,24 +39,34 @@ class ConnectionTest extends TestCase
         self::assertInstanceOf(DelayStrategy::class, $this->connection->getDelayStrategy());
     }
 
-    public function testDeduplicationStrategySetter(): void
-    {
-        $strategy = \Mockery::mock(\RabbitEvents\Foundation\Contracts\Deduplicator::class);
-        $this->connection->setDeduplicationStrategy($strategy);
-
-        self::assertSame($strategy, $this->connection->getDeduplicationStrategy());
-    }
-
-    public function testGetDeduplicationStrategy(): void
-    {
-        self::assertInstanceOf(
-            \RabbitEvents\Foundation\Contracts\Deduplicator::class,
-            $this->connection->getDeduplicationStrategy()
-        );
-    }
-
     public function testGetConfig()
     {
         self::assertEquals('events', $this->connection->getConfig('exchange'));
+    }
+
+    public function testMakeFailedQueue(): void
+    {
+        $queue = new \Interop\Amqp\Impl\AmqpQueue('test.queue.failed');
+        $context = m::mock(AmqpContext::class);
+        $context->shouldReceive('createQueue')->with('test.queue.failed')->andReturn($queue);
+        $context->shouldReceive('declareQueue')->with($queue)->once();
+
+        $conn = new class(['exchange' => 'events', 'durable' => true], $context) extends Connection {
+            public function __construct(array $config, private $mockContext)
+            {
+                parent::__construct($config);
+            }
+
+            public function createContext(): AmqpContext
+            {
+                return $this->mockContext;
+            }
+        };
+
+        $failedDestination = $conn->makeFailedQueue('test.queue');
+
+        self::assertInstanceOf(\RabbitEvents\Foundation\Contracts\FailedDestination::class, $failedDestination);
+        self::assertSame('test.queue', $failedDestination->getOriginalQueueName());
+        self::assertSame($queue, $failedDestination->getOrigin());
     }
 }

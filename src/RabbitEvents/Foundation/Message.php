@@ -21,7 +21,13 @@ class Message
 
     private bool $failed = false;
 
+    private ?\Throwable $failureException = null;
+
+    private ?string $failedListener = null;
+
     private bool $acknowledged = false;
+
+    private bool $released = false;
 
     public function __construct(
         public readonly string $event,
@@ -72,23 +78,6 @@ class Message
         return $this->transportMessage()->getMessageId();
     }
 
-    public function header(string $name, mixed $default = null): mixed
-    {
-        return $this->transportMessage()->getHeader($name, $default);
-    }
-
-    public function headers(): array
-    {
-        return $this->transportMessage()->getHeaders();
-    }
-
-    public function setHeader(string $name, mixed $value): self
-    {
-        $this->transportMessage()->setHeader($name, $value);
-
-        return $this;
-    }
-
     public function attempts(): int
     {
         return $this->getProperty('x-attempts', 0);
@@ -110,15 +99,6 @@ class Message
         $this->transportMessage = $transportMessage;
 
         return $this;
-    }
-
-    private ?\Throwable $failureException = null;
-
-    private ?string $failedListener = null;
-
-    public function event(): string
-    {
-        return $this->event;
     }
 
     public function markAsFailed(?\Throwable $exception = null, ?string $failedListener = null): self
@@ -157,5 +137,20 @@ class Message
     public function isAcknowledged(): bool
     {
         return $this->acknowledged;
+    }
+
+    /**
+     * Mark that a copy of the message was put back into its queue for another try.
+     */
+    public function markAsReleased(): self
+    {
+        $this->released = true;
+
+        return $this;
+    }
+
+    public function isReleased(): bool
+    {
+        return $this->released;
     }
 }

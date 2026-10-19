@@ -105,7 +105,7 @@ class MessageFactoryTest extends TestCase
             $factory = new MessageFactory($registry);
             $message = $factory->make(new Event());
 
-            $traceContext = $message->header('trace_context');
+            $traceContext = $message->getProperty('trace_context');
             self::assertEquals([
                 'scalar' => 'val',
                 'obj' => ['foo' => 'bar'],

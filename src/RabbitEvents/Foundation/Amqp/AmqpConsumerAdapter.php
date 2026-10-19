@@ -33,6 +33,14 @@ class AmqpConsumerAdapter implements QueueConsumer
         $this->consumer->reject($message->getOrigin(), $requeue);
     }
 
+    public function requeue(array $messages): void
+    {
+        // RabbitMQ puts a requeued message at the head of the queue, so the last one goes back first.
+        foreach (array_reverse($messages) as $message) {
+            $this->reject($message, true);
+        }
+    }
+
     public function __call(string $method, array $args)
     {
         return $this->consumer->$method(...$args);

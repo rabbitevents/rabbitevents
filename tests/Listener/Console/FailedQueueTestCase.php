@@ -76,20 +76,15 @@ abstract class FailedQueueTestCase extends TestCase
 
         $dlxProducer = new ProducerStub();
         $failer = new \RabbitEvents\Listener\Support\Failer(
-            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('rabbitevents.dlx'),
-            $dlxProducer,
-            $originalQueue ?? 'test-service:'
+            new \RabbitEvents\Tests\Foundation\Stubs\FailedDestinationStub($originalQueue ?? 'test-service:'),
+            $dlxProducer
         );
         $failer->send($message);
 
         $transportMessage = $dlxProducer->sent[0]['message'];
 
         if ($failedAt !== null) {
-            $transportMessage->setHeader('x-failed-at', $failedAt);
-        }
-
-        if ($originalQueue !== null) {
-            $transportMessage->setHeader('x-death', [['queue' => $originalQueue, 'reason' => 'rejected']]);
+            $transportMessage->setProperty('x-failed-at', $failedAt);
         }
 
         return $transportMessage;

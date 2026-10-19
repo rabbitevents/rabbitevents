@@ -37,6 +37,17 @@ class QueueConsumerStub implements QueueConsumer
         }
     }
     
+    public array $requeued = [];
+
+    /**
+     * Mimics RabbitMQ: requeued messages go back to the head of the queue, in their order.
+     */
+    public function requeue(array $messages): void
+    {
+        $this->requeued = array_merge($this->requeued, $messages);
+        array_unshift($this->messages, ...$messages);
+    }
+
     public function addMessage(TransportMessage $message): void
     {
         $this->messages[] = $message;

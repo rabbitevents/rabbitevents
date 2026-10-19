@@ -75,4 +75,12 @@ class Consumer
     {
         $this->consumer->reject($message->transportMessage(), $requeue);
     }
+
+    /**
+     * @param list<Message> $messages In the order they were received
+     */
+    public function requeue(array $messages): void
+    {
+        $this->consumer->requeue(array_map(static fn(Message $message) => $message->transportMessage(), $messages));
+    }
 }

@@ -49,12 +49,4 @@ interface TransportMessage
     public function getMessageId(): ?string;
 
     public function setMessageId(?string $messageId): void;
-
-    public function getHeader(string $name, mixed $default = null): mixed;
-
-    public function getHeaders(): array;
-
-    public function setHeader(string $name, mixed $value): void;
-
-    public function setHeaders(array $headers): void;
 }

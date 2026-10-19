@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Console;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Str;
 use RabbitEvents\Foundation\Consumer;
 use RabbitEvents\Foundation\Context;
 use RabbitEvents\Foundation\Contracts\Destination;
+use RabbitEvents\Foundation\Contracts\FailedDestination;
 use RabbitEvents\Foundation\Contracts\Producer;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Foundation\Support\Sender;
+use RabbitEvents\Listener\Support\Failer;
 
 class RetryCommand extends Command
 {
@@ -72,12 +73,12 @@ class RetryCommand extends Command
         $producer = null;
         $retried = 0;
 
-        $this->eachFailedMessage(function (Message $message, Consumer $consumer, Context $context) use ($targetId, &$producer, &$retried) {
+        $this->eachFailedMessage(function (Message $message, Consumer $consumer, Context $context, FailedDestination $failedQueue) use ($targetId, &$producer, &$retried) {
             $msgId = $message->id();
 
             if (is_null($targetId) || $msgId === $targetId) {
                 $producer ??= $context->createProducer();
-                $targetQueue = $this->getTargetQueue($context, $message);
+                $targetQueue = $this->getTargetQueue($context, $message, $failedQueue);
                 $this->republishMessage($message, $producer, $targetQueue);
                 $consumer->acknowledge($message);
 
@@ -95,9 +96,9 @@ class RetryCommand extends Command
         return $retried;
     }
 
-    protected function getTargetQueue(Context $context, Message $message): Destination
+    protected function getTargetQueue(Context $context, Message $message, FailedDestination $failedQueue): Destination
     {
-        $queueName = $this->getOriginalQueueName($message);
+        $queueName = $message->getProperty('x-original-queue') ?: $failedQueue->getOriginalQueueName();
 
         return $context->makeQueue($queueName, [], $context->makeTopic());
     }
@@ -109,8 +110,8 @@ class RetryCommand extends Command
         $message->setProperty('event', $routingKey);
         $message->setProperty('x-attempts', 0);
 
-        if ($message->header('x-deduplication-header')) {
-            $message->setHeader('x-deduplication-header', (string) Str::uuid());
+        foreach (Failer::FAILURE_PROPERTIES as $property) {
+            $message->setProperty($property, null);
         }
 
         (new Sender($destination, $producer))->send($message);

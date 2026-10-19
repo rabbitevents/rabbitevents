@@ -71,27 +71,4 @@ class TransportMessageStub implements TransportMessage
     {
         $this->setProperty('message_id', $messageId);
     }
-
-    public function getHeader(string $name, mixed $default = null): mixed
-    {
-        $headers = $this->getHeaders();
-        return $headers[$name] ?? $default;
-    }
-
-    public function getHeaders(): array
-    {
-        return (array) $this->getProperty('headers', []);
-    }
-
-    public function setHeader(string $name, mixed $value): void
-    {
-        $headers = $this->getHeaders();
-        $headers[$name] = $value;
-        $this->setHeaders($headers);
-    }
-
-    public function setHeaders(array $headers): void
-    {
-        $this->setProperty('headers', $headers);
-    }
 }

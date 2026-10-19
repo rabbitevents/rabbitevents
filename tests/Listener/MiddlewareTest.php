@@ -299,7 +299,7 @@ class MiddlewareTest extends TestCase
 
     private function makeHandler($message, $callback): Handler
     {
-        return new Handler($message, $callback, __CLASS__, \Mockery::mock(Transport::class));
+        return new Handler($message, $callback, __CLASS__, \Mockery::mock(\RabbitEvents\Listener\Support\Releaser::class));
     }
 }
 

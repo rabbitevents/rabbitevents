@@ -28,11 +28,10 @@ class ConnectionStub implements Connection
         return $this->consumer ?? new QueueConsumerStub();
     }
 
-    public function makeTopic(?string $name = null): Destination
+    public function makeTopic(): Destination
     {
-        $topicName = $name ?? 'topic';
-        $this->createdTopics[] = $topicName;
-        return new DestinationStub($topicName);
+        $this->createdTopics[] = 'topic';
+        return new DestinationStub('topic');
     }
 
     public function makeQueue(string $queueName, array $events, Destination $topic): Destination
@@ -46,8 +45,13 @@ class ConnectionStub implements Connection
         return new DestinationStub($queueName);
     }
 
-    public function getDeduplicationStrategy(): \RabbitEvents\Foundation\Contracts\Deduplicator
+    public function makeFailedQueue(string $queueName): \RabbitEvents\Foundation\Contracts\FailedDestination
     {
-        return new \RabbitEvents\Foundation\Deduplication\NullDeduplicator();
+        $this->createdQueues[] = [
+            'name' => $queueName . \RabbitEvents\Foundation\Contracts\FailedDestination::SUFFIX,
+            'is_failed' => true,
+        ];
+
+        return new FailedDestinationStub($queueName);
     }
 }

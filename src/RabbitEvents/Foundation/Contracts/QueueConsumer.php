@@ -30,4 +30,11 @@ interface QueueConsumer
      * @return void
      */
     public function reject(TransportMessage $message, bool $requeue = false): void;
+
+    /**
+     * Return received, unacknowledged messages to the queue so they are delivered again in the same order.
+     *
+     * @param list<TransportMessage> $messages In the order they were received
+     */
+    public function requeue(array $messages): void;
 }

@@ -13,8 +13,8 @@ use RabbitEvents\Listener\Events\ListenerHandled;
 use RabbitEvents\Listener\Events\ListenerHandleFailed;
 use RabbitEvents\Listener\Events\ListenerHandlerExceptionOccurred;
 use RabbitEvents\Listener\Events\ListenerHandling;
-use RabbitEvents\Foundation\Contracts\Deduplicator;
-use RabbitEvents\Foundation\Deduplication\NullDeduplicator;
+use RabbitEvents\Listener\Contracts\Deduplicator;
+use RabbitEvents\Listener\Deduplication\NullDeduplicator;
 use RabbitEvents\Listener\Exceptions\FailedException;
 use RabbitEvents\Listener\ListenerOptions;
 use Throwable;
@@ -39,12 +39,12 @@ class Processor
      */
     public function process(Message $message, ListenerOptions $options): void
     {
-        if ($this->deduplicator->isDuplicate($message->transportMessage())) {
+        if ($this->deduplicator->isDuplicate($message, $options->queue())) {
             return;
         }
 
         $this->withContext($message, function () use ($message, $options) {
-            $succeededListeners = (array) $message->header('x-succeeded-listeners', []);
+            $succeededListeners = (array) $message->getProperty('x-succeeded-listeners', []);
 
             foreach ($this->dispatcher->getListeners($message->event) as $listener) {
                 $listenerClass = $this->getListenerClass($listener);
@@ -60,7 +60,7 @@ class Processor
 
                 if ($listenerClass !== 'Closure') {
                     $succeededListeners[] = $listenerClass;
-                    $message->setHeader('x-succeeded-listeners', array_values(array_unique($succeededListeners)));
+                    $message->setProperty('x-succeeded-listeners', array_values(array_unique($succeededListeners)));
                 }
 
                 if ($response === false) {
@@ -69,7 +69,7 @@ class Processor
             }
         });
 
-        $this->deduplicator->markHandled($message->transportMessage());
+        $this->deduplicator->markHandled($message, $options->queue());
     }
 
     protected function withContext(Message $message, callable $callback): mixed
@@ -81,7 +81,7 @@ class Processor
         $previous = Context::all();
         $previousHidden = Context::allHidden();
 
-        if ($context = $message->header('trace_context')) {
+        if ($context = $message->getProperty('trace_context')) {
             Context::add((array) $context);
         }
 

@@ -43,4 +43,18 @@ class MessageFactoryTest extends TestCase
         self::assertEquals('UTF-8', $origin->getProperty('content_encoding'));
         self::assertEquals('application/json', $origin->getProperty('content_type'));
     }
+
+    public function testMessageIdIsAnAmqpPropertyNotAnApplicationHeader(): void
+    {
+        $payload = new \RabbitEvents\Foundation\Support\JsonPayload(['some' => 'payload']);
+
+        $result = (new AmqpMessageFactory())->make('event', $payload, [
+            'message_id' => 'msg-1',
+            'trace_context' => ['trace_id' => 't-1'],
+        ]);
+
+        self::assertSame('msg-1', $result->getMessageId());
+        self::assertSame(['trace_id' => 't-1'], $result->getProperty('trace_context'));
+        self::assertArrayNotHasKey('message_id', $result->getProperties());
+    }
 }

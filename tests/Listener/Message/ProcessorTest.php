@@ -179,9 +179,9 @@ class ProcessorTest extends TestCase
 
     public function testProcessSkipsDuplicateMessage()
     {
-        $deduplicator = m::mock(\RabbitEvents\Foundation\Contracts\Deduplicator::class);
+        $deduplicator = m::mock(\RabbitEvents\Listener\Contracts\Deduplicator::class);
         $deduplicator->shouldReceive('isDuplicate')
-            ->with($this->message->transportMessage())
+            ->with($this->message, 'test-app:event.one,event.two')
             ->once()
             ->andReturn(true);
         $deduplicator->shouldNotReceive('markHandled');
@@ -197,6 +197,32 @@ class ProcessorTest extends TestCase
 
         self::assertCount(0, $handlerFactory->handlers);
         $this->events->shouldNotHaveReceived('dispatch');
+    }
+
+    public function testProcessMarksMessageHandledOnlyAfterListenersSucceeded()
+    {
+        $this->mockListeners([static fn() => true]);
+
+        $deduplicator = m::mock(\RabbitEvents\Listener\Contracts\Deduplicator::class);
+        $deduplicator->shouldReceive('isDuplicate')->once()->andReturn(false);
+        $deduplicator->shouldReceive('markHandled')->with($this->message, 'test-app:event.one,event.two')->once();
+
+        (new Processor(new FakeHandlerFactory(), $this->events, $this->dispatcher, $deduplicator))
+            ->process($this->message, $this->options());
+    }
+
+    public function testProcessDoesNotMarkMessageHandledWhenListenerThrows()
+    {
+        $this->mockListeners([static fn() => throw new \RuntimeException('boom')]);
+
+        $deduplicator = m::mock(\RabbitEvents\Listener\Contracts\Deduplicator::class);
+        $deduplicator->shouldReceive('isDuplicate')->once()->andReturn(false);
+        $deduplicator->shouldNotReceive('markHandled');
+
+        $this->expectException(\RuntimeException::class);
+
+        (new Processor(new FakeHandlerFactory(), $this->events, $this->dispatcher, $deduplicator))
+            ->process($this->message, $this->options());
     }
 
     public function testListenerHandledEventContainsDuration()
@@ -230,9 +256,7 @@ class ProcessorTest extends TestCase
 
             $message = new Message('test.event', new Payload(['hello' => 'world']), [
                 'message_id' => 'msg-ctx',
-                'headers' => [
-                    'trace_context' => ['trace_id' => '12345'],
-                ],
+                'trace_context' => ['trace_id' => '12345'],
             ]);
 
             $dispatcher = new RabbitEventsDispatcher($app);
@@ -301,7 +325,7 @@ class ProcessorTest extends TestCase
         self::assertSame(1, FirstRealListener::$calls);
         self::assertSame(1, SecondFailingRealListener::$calls);
         self::assertCount(1, $releaseProducer->sent, 'Message should have been released back to queue');
-        self::assertSame([FirstRealListener::class], $message->header('x-succeeded-listeners'));
+        self::assertSame([FirstRealListener::class], $message->getProperty('x-succeeded-listeners'));
         self::assertFalse($message->hasFailed());
 
         // Attempt 2 (Consumer::nextMessage increments attempts to 2):
@@ -321,15 +345,14 @@ class ProcessorTest extends TestCase
         // Verify Failer writes the failing listener class and diagnostic headers
         $dlxProducer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub();
         $failer = new \RabbitEvents\Listener\Support\Failer(
-            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('rabbitevents.dlx'),
-            $dlxProducer,
-            'orders-queue'
+            new \RabbitEvents\Tests\Foundation\Stubs\FailedDestinationStub('orders-queue'),
+            $dlxProducer
         );
         $failer->send($message);
 
-        self::assertSame(SecondFailingRealListener::class, $message->header('x-listener'));
-        self::assertSame('Second listener boom', $message->header('x-exception-message'));
-        self::assertSame('order.created', $message->header('x-original-routing-key'));
+        self::assertSame(SecondFailingRealListener::class, $message->getProperty('x-listener'));
+        self::assertSame('Second listener boom', $message->getProperty('x-exception-message'));
+        self::assertSame('order.created', $message->getProperty('x-original-routing-key'));
     }
 }
 
@@ -401,7 +424,7 @@ class FakeHandler extends Handler
             $message, 
             $this->callback, 
             'FakeListener', 
-            m::mock(Transport::class)
+            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
         );
     }
 

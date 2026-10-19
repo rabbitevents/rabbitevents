@@ -28,13 +28,10 @@ class MessageFactory
         $properties = [
             'content_type' => (string) $payload->contentType(),
             'message_id' => $messageId,
-            'headers' => [
-                'x-deduplication-header' => $messageId,
-            ],
         ];
 
         if (Facade::getFacadeApplication() && ($contextData = Context::all())) {
-            $properties['headers']['trace_context'] = $this->sanitizeContextData($contextData);
+            $properties['trace_context'] = $this->sanitizeContextData($contextData);
         }
 
         if (is_object($rawPayload)) {

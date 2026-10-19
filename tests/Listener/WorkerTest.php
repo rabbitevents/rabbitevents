@@ -13,6 +13,7 @@ use RabbitEvents\Listener\Events\MessageProcessingFailed;
 use RabbitEvents\Listener\Events\WorkerStopping;
 use RabbitEvents\Listener\ListenerOptions;
 use RabbitEvents\Listener\Message\Processor;
+use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Listener\Worker;
 use RabbitEvents\Listener\WorkerExitStatus;
 use RabbitEvents\Tests\MocksCommonObjects;
@@ -46,6 +47,7 @@ class WorkerTest extends TestCase
     {
         $message = m::mock(Message::class);
         $message->shouldReceive('hasFailed')->byDefault()->andReturn(false);
+        $message->shouldReceive('isReleased')->byDefault()->andReturn(false);
 
         return $message;
     }
@@ -109,31 +111,93 @@ class WorkerTest extends TestCase
         $this->events->shouldHaveReceived()->dispatch(m::type(WorkerStopping::class))->once();
     }
 
-    public function testFinallyAcknowledge(): void
+    public function testMessageInterruptedOutsideListenersIsReleasedInsteadOfAcknowledgedAsHandled(): void
     {
-        $exception = new \RuntimeException();
+        $exception = new \RuntimeException('Deduplication store failed');
+        $message = $this->createRealMessage();
+        $message->setProperty('x-succeeded-listeners', ['App\\Listeners\\First']);
 
-        $worker = new Worker($this->exceptionHandler, $this->events);
-        $worker->shouldQuit = true; //For one tick only
-
-        $processor = m::mock(Processor::class);
-        $processor->shouldReceive('process')
-            ->andThrow($exception);
-
-        $message = $this->createMessageMock();
+        $releaser = m::mock(Releaser::class);
         $consumer = m::mock(Consumer::class);
-        $consumer->shouldReceive('nextMessage')
-            ->andReturn($message);
+        $consumer->shouldReceive('nextMessage')->andReturn($message);
+        // The copy must be in the queue before the original is acknowledged.
+        $releaser->shouldReceive('release')->once()->with($message, $this->options->sleep)->ordered()
+            ->andReturnUsing(fn(Message $released) => $released->markAsReleased());
+        $consumer->shouldReceive('acknowledge')->once()->with($message)->ordered();
+        $consumer->shouldNotReceive('reject');
 
-        $consumer->shouldReceive()
-            ->acknowledge($message);
-
-        $status = $worker->work($processor, $consumer, $this->options);
-
-        self::assertEquals(WorkerExitStatus::SUCCESS, $status);
+        $this->workOnce($this->processorThrowing($exception), $consumer, $releaser);
 
         $this->exceptionHandler->shouldHaveReceived()->report($exception);
-        $this->events->shouldHaveReceived()->dispatch(m::type(WorkerStopping::class))->once();
+        // Listeners that already handled it skip the released copy.
+        self::assertSame(['App\\Listeners\\First'], $message->getProperty('x-succeeded-listeners'));
+    }
+
+    public function testMessageAlreadyReleasedByItsListenerIsOnlyAcknowledged(): void
+    {
+        $message = $this->createRealMessage();
+        $releaser = m::mock(Releaser::class);
+        $releaser->shouldNotReceive('release');
+
+        $processor = m::mock(Processor::class);
+        $processor->shouldReceive('process')->andReturnUsing(function (Message $message) {
+            $message->markAsReleased(); // what Handler::release() does before rethrowing the listener exception
+            throw new \RuntimeException('Listener failed');
+        });
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->andReturn($message);
+        $consumer->shouldReceive('acknowledge')->once()->with($message);
+
+        $this->workOnce($processor, $consumer, $releaser);
+    }
+
+    public function testInterruptedMessageIsRequeuedWhenItCannotBeReleased(): void
+    {
+        $message = $this->createRealMessage();
+        $releaser = m::mock(Releaser::class);
+        $releaser->shouldReceive('release')->andThrow(new \RuntimeException('Broker unavailable'));
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->andReturn($message);
+        $consumer->shouldNotReceive('acknowledge');
+        $consumer->shouldReceive('reject')->once()->with($message, true);
+
+        $this->workOnce($this->processorThrowing(new \RuntimeException()), $consumer, $releaser);
+    }
+
+    public function testInterruptedMessageIsRequeuedWithoutReleaser(): void
+    {
+        $message = $this->createRealMessage();
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->andReturn($message);
+        $consumer->shouldNotReceive('acknowledge');
+        $consumer->shouldReceive('reject')->once()->with($message, true);
+
+        $this->workOnce($this->processorThrowing(new \RuntimeException()), $consumer);
+    }
+
+    private function workOnce(Processor $processor, Consumer $consumer, ?Releaser $releaser = null): void
+    {
+        $worker = new Worker($this->exceptionHandler, $this->events);
+        $worker->setReleaser($releaser);
+        $worker->shouldQuit = true; // one tick only
+
+        self::assertEquals(WorkerExitStatus::SUCCESS, $worker->work($processor, $consumer, $this->options));
+    }
+
+    private function processorThrowing(\Throwable $exception): Processor
+    {
+        $processor = m::mock(Processor::class);
+        $processor->shouldReceive('process')->andThrow($exception);
+
+        return $processor;
+    }
+
+    private function createRealMessage(): Message
+    {
+        return (new Message('order.created', new \RabbitEvents\Foundation\Support\JsonPayload(['id' => 1])))
+            ->setTransportMessage(new \RabbitEvents\Tests\Foundation\Stubs\TransportMessageStub('{"id":1}', ['x-attempts' => 1]));
     }
 
     public function testProcessNotStartedIfExceededMaxAttempts(): void
@@ -201,7 +265,8 @@ class WorkerTest extends TestCase
         $consumer->shouldReceive('nextMessage')
             ->andReturn($this->createMessageMock());
 
-        $consumer->shouldReceive('acknowledge')->once();
+        // Interrupted and no releaser: returned to the queue, not acknowledged.
+        $consumer->shouldReceive('reject')->once()->with(m::type(Message::class), true);
 
         $processor = m::mock(Processor::class);
         $processor->shouldReceive('process')
@@ -224,9 +289,8 @@ class WorkerTest extends TestCase
 
         $dlxProducer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub();
         $failer = new \RabbitEvents\Listener\Support\Failer(
-            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('rabbitevents.dlx'),
-            $dlxProducer,
-            'orders-queue'
+            new \RabbitEvents\Tests\Foundation\Stubs\FailedDestinationStub('orders-queue'),
+            $dlxProducer
         );
         $worker->setFailer($failer);
 
@@ -257,8 +321,8 @@ class WorkerTest extends TestCase
 
         self::assertEquals(WorkerExitStatus::SUCCESS, $status);
         self::assertCount(1, $dlxProducer->sent, 'Failer must send failed message to DLX');
-        self::assertSame('Permanent listener failure', $dlxProducer->sent[0]['message']->getHeader('x-exception-message'));
-        self::assertSame('order.failed', $dlxProducer->sent[0]['message']->getHeader('x-original-routing-key'));
+        self::assertSame('Permanent listener failure', $dlxProducer->sent[0]['message']->getProperty('x-exception-message'));
+        self::assertSame('order.failed', $dlxProducer->sent[0]['message']->getProperty('x-original-routing-key'));
         self::assertCount(1, $queueConsumer->acknowledged, 'Original message must be acknowledged after Failer publishes to DLX');
         self::assertCount(0, $queueConsumer->rejected, 'Original message must NOT be rejected when Failer handles it');
     }

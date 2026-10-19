@@ -16,7 +16,6 @@ class FlushFailedCommand extends Command
      * @var string
      */
     protected $signature = 'rabbitevents:flush
-                            {events? : The events the queue was listening for}
                             {--events= : The events the queue was listening for}
                             {--queue= : The failed queue name (e.g. service:events.failed)}
                             {--connection= : The connection name}

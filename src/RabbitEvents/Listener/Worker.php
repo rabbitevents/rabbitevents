@@ -14,6 +14,7 @@ use RabbitEvents\Listener\Events\WorkerStopping;
 use RabbitEvents\Listener\Exceptions\MaxAttemptsExceededException;
 use RabbitEvents\Listener\Exceptions\TimeoutExceededException;
 use RabbitEvents\Listener\Message\Processor;
+use RabbitEvents\Listener\Support\Releaser;
 use Throwable;
 
 class Worker
@@ -25,6 +26,8 @@ class Worker
 
     protected ?\RabbitEvents\Foundation\Contracts\Transport $failer = null;
 
+    protected ?Releaser $releaser = null;
+
     public function __construct(
         private ExceptionHandler $exceptions,
         private EventsDispatcher $events
@@ -34,6 +37,16 @@ class Worker
     public function setFailer(?\RabbitEvents\Foundation\Contracts\Transport $failer): self
     {
         $this->failer = $failer;
+
+        return $this;
+    }
+
+    /**
+     * Used to return a message whose processing was interrupted outside its listeners.
+     */
+    public function setReleaser(?Releaser $releaser): self
+    {
+        $this->releaser = $releaser;
 
         return $this;
     }
@@ -53,7 +66,7 @@ class Worker
                     $this->registerTimeoutHandler($message, $consumer, $options);
                 }
 
-                $this->processMessage($processor, $message, $options);
+                $completed = $this->processMessage($processor, $message, $options);
 
                 if ($supportsAsyncSignals) {
                     $this->resetTimeoutHandler();
@@ -61,8 +74,10 @@ class Worker
 
                 if ($message->hasFailed()) {
                     $this->failMessage($message, $consumer);
-                } else {
+                } elseif ($completed || $message->isReleased()) {
                     $consumer->acknowledge($message);
+                } else {
+                    $this->returnInterruptedMessage($message, $consumer, $options);
                 }
             }
 
@@ -95,17 +110,38 @@ class Worker
      * @param Processor $processor
      * @param Message $message
      * @param ListenerOptions $options
-     * @return void
+     * @return bool False if processing threw
      */
-    private function processMessage(Processor $processor, Message $message, ListenerOptions $options): void
+    private function processMessage(Processor $processor, Message $message, ListenerOptions $options): bool
     {
         try {
             $this->skipIfAlreadyExceedsMaxAttempts($message, $options);
 
             $processor->process($message, $options);
+
+            return true;
+        } catch (Throwable $throwable) {
+            $this->exceptions->report($throwable);
+
+            return false;
+        }
+    }
+
+    /**
+     * Processing threw outside the listeners (a failing listener releases the message itself), so the
+     * message was not handled completely and must not be acknowledged as handled. A released copy keeps
+     * `x-succeeded-listeners`, so listeners that already handled it skip it. Requeueing the original is
+     * the fallback: RabbitMQ redelivers it as it was received, and those listeners run again.
+     */
+    protected function returnInterruptedMessage(Message $message, Consumer $consumer, ListenerOptions $options): void
+    {
+        try {
+            $this->releaser?->release($message, $options->sleep);
         } catch (Throwable $throwable) {
             $this->exceptions->report($throwable);
         }
+
+        $message->isReleased() ? $consumer->acknowledge($message) : $consumer->reject($message, true);
     }
 
     /**

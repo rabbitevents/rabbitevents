@@ -104,10 +104,11 @@ class ListenCommandTest extends TestCase
 
         $context->shouldReceive('makeTopic')->andReturn($destination);
         $context->shouldReceive('makeQueue')->once()->andReturn($destination);
+        $context->shouldReceive('makeFailedQueue')->once()->andReturn(new \RabbitEvents\Tests\Foundation\Stubs\FailedDestinationStub('q'));
         $context->shouldReceive('createProducer')->andReturn($producer);
         $context->shouldReceive('makeConsumer')->once()->andReturn($consumer);
-        $context->shouldReceive('getDeduplicator')->once()->andReturn(new \RabbitEvents\Foundation\Deduplication\NullDeduplicator());
 
+        $worker->shouldReceive('setReleaser')->once();
         $worker->shouldReceive('setFailer')->once();
         $worker->shouldReceive('work')->once()->andReturn(WorkerExitStatus::SUCCESS);
 
@@ -144,10 +145,11 @@ class ListenCommandTest extends TestCase
 
         $context->shouldReceive('makeTopic')->andReturn($destination);
         $context->shouldReceive('makeQueue')->once()->andReturn($destination);
+        $context->shouldReceive('makeFailedQueue')->once()->with('test-service:user.created')->andReturn(new \RabbitEvents\Tests\Foundation\Stubs\FailedDestinationStub('test-service:user.created'));
         $context->shouldReceive('createProducer')->andReturn($producer);
         $context->shouldReceive('makeConsumer')->once()->andReturn($consumer);
-        $context->shouldReceive('getDeduplicator')->once()->andReturn(new \RabbitEvents\Foundation\Deduplication\NullDeduplicator());
 
+        $worker->shouldReceive('setReleaser')->once();
         $worker->shouldReceive('setFailer')->once();
         $worker->shouldReceive('work')->once()->andReturn(WorkerExitStatus::SUCCESS);
 
@@ -160,6 +162,7 @@ class ListenCommandTest extends TestCase
     private function createMockApplication(): Container
     {
         $app = new Container();
+        $app->bind(\RabbitEvents\Listener\Contracts\Deduplicator::class, \RabbitEvents\Listener\Deduplication\NullDeduplicator::class);
         $configObj = new class([
             'app.name' => 'test-service',
             'rabbitevents.default' => 'rabbitmq',
