@@ -115,9 +115,14 @@ class ListenCommand extends Command
             new Releaser($queue, $context->createProducer())
         );
 
-        $dlxEnabled = (bool) $this->laravel['config']->get("rabbitevents.connections.{$options->connectionName}.dlx.enabled", true);
+        $hasConnectionConfig = isset($context->connection) && method_exists($context->connection, 'getConfig');
+        $dlxEnabled = $hasConnectionConfig
+            ? (bool) $context->connection->getConfig('dlx.enabled', true)
+            : (bool) $this->laravel['config']->get("rabbitevents.connections.{$options->connectionName}.dlx.enabled", true);
         if ($dlxEnabled) {
-            $dlxExchange = (string) $this->laravel['config']->get("rabbitevents.connections.{$options->connectionName}.dlx.exchange", 'rabbitevents.dlx');
+            $dlxExchange = $hasConnectionConfig
+                ? (string) $context->connection->getConfig('dlx.exchange', 'rabbitevents.dlx')
+                : (string) $this->laravel['config']->get("rabbitevents.connections.{$options->connectionName}.dlx.exchange", 'rabbitevents.dlx');
             $worker->setFailer(new Failer(
                 $context->makeTopic($dlxExchange),
                 $context->createProducer(),

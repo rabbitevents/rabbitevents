@@ -150,13 +150,7 @@ The `publish()` helper now returns the generated `string` Message ID (UUIDv4) or
 $messageId = publish('user.registered', $payload);
 ```
 
-#### 4. Existing RabbitMQ Queues & Dead Letter Exchange (DLX)
-In 10.x, Dead Letter Queue routing is enabled by default (`x-dead-letter-exchange: rabbitevents.dlx`).
-Because RabbitMQ queue declaration arguments are immutable:
-* If you have existing queues created by 9.x, RabbitMQ will reject the new declaration with a `PRECONDITION_FAILED` error.
-* **To upgrade smoothly**, either recreate the worker queues (delete them so RabbitEvents redeclares them with DLX) or disable DLX in `config/rabbitevents.php` by setting `'dlx.enabled' => false` (or `RABBITEVENTS_DLX_ENABLED=false`).
-
-#### 5. Removed `rabbitevents:restart` Command
+#### 4. Removed `rabbitevents:restart` Command
 The deprecated `rabbitevents:restart` command has been removed. Use your process supervisor (Supervisor, Kubernetes, Docker) to restart listener workers gracefully.
 
 ---
@@ -348,7 +342,8 @@ php artisan rabbitevents:flush
 
 > [!TIP]
 > **Zero-Downtime Coexistence with RabbitEvents 9.x**
-> Existing queues declared under RabbitEvents 9.x continue working seamlessly without requiring manual queue deletion or migration. If an existing queue lacks RabbitMQ DLX arguments, RabbitEvents 10.x logs a warning and automatically activates application-level dead-letter routing to deliver failed messages to `{queue}.failed`.
+> Existing queues declared under RabbitEvents 9.x continue working seamlessly without requiring manual queue deletion or migration. Dead-letter routing publishes failed messages directly to `rabbitevents.dlx` (`{queue}.failed`) without mutating existing worker queue arguments.
+> Note: `rabbitevents:failed`, `rabbitevents:retry <id>`, and `rabbitevents:forget <id>` scan up to 10,000 messages in `{queue}.failed` by default (while holding scanned unacknowledged messages in memory until the command finishes). Use `rabbitevents:retry --all` or `rabbitevents:flush` to process the entire failed queue without a scan limit.
 
 
 ### Transactional Publishing (`afterCommit`)<a name="transactional-publishing"></a>

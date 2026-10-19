@@ -102,15 +102,28 @@ class Processor
 
     protected function getListenerClass(mixed $listener): string
     {
-        if (is_object($listener)) {
-            return get_class($listener);
+        if ($listener instanceof \Closure) {
+            $used = (new \ReflectionFunction($listener))->getStaticVariables();
+            if (isset($used['listener']) && !$used['listener'] instanceof \Closure) {
+                return $this->getListenerClass($used['listener']);
+            }
+
+            return \Closure::class;
+        }
+
+        if (is_string($listener)) {
+            return \Illuminate\Support\Str::parseCallback($listener)[0];
         }
 
         if (is_array($listener)) {
             return is_object($listener[0]) ? get_class($listener[0]) : $listener[0];
         }
 
-        return 'Closure';
+        if (is_object($listener)) {
+            return get_class($listener);
+        }
+
+        return \Closure::class;
     }
 
     /**

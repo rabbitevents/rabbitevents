@@ -59,33 +59,40 @@ abstract class FailedQueueTestCase extends TestCase
     }
 
     protected function createFailedTransportMessage(
-        string $id,
+        ?string $id,
         string $event = 'order.created',
         ?string $originalQueue = null,
-        string $failedAt = '1700000000',
+        ?string $failedAt = null,
         string $exception = 'Something failed'
-    ): TransportMessageStub {
-        $headers = [
-            'x-original-routing-key' => $event,
-            'x-failed-at' => $failedAt,
-            'x-exception-message' => $exception,
-        ];
+    ): \RabbitEvents\Foundation\Contracts\TransportMessage {
+        $properties = $id !== null ? ['message_id' => $id] : [];
+        $message = new \RabbitEvents\Foundation\Message(
+            $event,
+            new \RabbitEvents\Foundation\Support\JsonPayload(['data' => 'test']),
+            $properties
+        );
+        $message->increaseAttempts();
+        $message->markAsFailed(new \RuntimeException($exception), 'App\\Listeners\\OrderListener');
 
-        if ($originalQueue) {
-            $headers['x-death'] = [['queue' => $originalQueue, 'reason' => 'rejected']];
+        $dlxProducer = new ProducerStub();
+        $failer = new \RabbitEvents\Listener\Support\Failer(
+            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('rabbitevents.dlx'),
+            $dlxProducer,
+            $originalQueue ?? 'test-service:'
+        );
+        $failer->send($message);
+
+        $transportMessage = $dlxProducer->sent[0]['message'];
+
+        if ($failedAt !== null) {
+            $transportMessage->setHeader('x-failed-at', $failedAt);
         }
 
-        return new TransportMessageStub(
-            body: json_encode(['data' => 'test']),
-            properties: [
-                'message_id' => $id,
-                'content_type' => 'application/json',
-                'event' => $event,
-                'routing_key' => $event,
-                'x-attempts' => 3,
-                'headers' => $headers,
-            ]
-        );
+        if ($originalQueue !== null) {
+            $transportMessage->setHeader('x-death', [['queue' => $originalQueue, 'reason' => 'rejected']]);
+        }
+
+        return $transportMessage;
     }
 
     /**

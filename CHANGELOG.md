@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Dead Letter Exchange (DLX) & Failed Messages Management**:
-    - `DeadLetterConfigurator`: automatically creates `rabbitevents.dlx` topic exchange, declares and binds `{$queue}.failed` queue, and attaches `x-dead-letter-exchange` / `x-dead-letter-routing-key` arguments to declared queues.
+    - `DeadLetterConfigurator`: automatically creates `rabbitevents.dlx` topic exchange and declares and binds `{$queue}.failed` queue without mutating existing worker queue arguments.
     - `rabbitevents:failed`: Artisan command to inspect and list failed messages from the DLX queue with routing key, failed time, and exception details.
     - `rabbitevents:retry`: Artisan command to re-queue failed messages back into the original working queue and acknowledge them from the failed queue (`{id}` or `--all`).
     - `rabbitevents:forget`: Artisan command to remove a specific failed message from the failed queue.
@@ -39,9 +39,8 @@ All notable changes to this project will be documented in this file.
     - Added `id()`, `attempts()`, `increaseAttempts()`, and `hasFailed()` methods.
 - **JsonPayload**: Now implements `\JsonSerializable` for seamless serialization with `json_encode()`.
 - **Queue Declarations & Seamless 9.x Coexistence**:
-    - `QueueFactory` now automatically configures DLX bindings when durability and DLX are enabled.
-    - Graceful fallback: If an existing queue was declared without DLX arguments (e.g. from RabbitEvents 9.x), `QueueFactory` catches the AMQP 406 `PRECONDITION_FAILED` error, logs a helpful warning, and cleanly binds to the existing queue without requiring destructive queue migrations or queue deletion.
-    - `Failer`: Worker routes failed messages with diagnostic headers (`x-exception-message`, `x-exception-class`, `x-exception-trace`, `x-failed-at`, `x-original-routing-key`, `x-listener`, `trace_context`) into `rabbitevents.dlx` exchange, delivering to `{queue}.failed` reliably across both broker-level and application-level DLX configurations.
+    - `QueueFactory` and `DeadLetterConfigurator` automatically configure `rabbitevents.dlx` and `{queue}.failed` bindings when DLX is enabled without adding conflicting queue arguments to existing 9.x queues.
+    - `Failer`: Worker routes failed messages with diagnostic headers (`x-exception-message`, `x-exception-class`, `x-exception-trace`, `x-failed-at`, `x-original-routing-key`, `x-listener`, `trace_context`) into `rabbitevents.dlx` exchange, delivering to `{queue}.failed` reliably.
 - **Failed Queue Commands Overhaul**:
     - `InteractsWithFailedQueue`: Fixed browsing loop to keep messages unacknowledged during iteration and only requeue unhandled messages upon completion, preventing infinite single-message requeue loops on RabbitMQ.
     - Added `--queue` and `--events` options to `rabbitevents:failed`, `rabbitevents:retry`, `rabbitevents:forget`, and `rabbitevents:flush` for precise queue targeting.

@@ -20,10 +20,8 @@ class FailerTest extends TestCase
         $producer = new ProducerStub();
         $failer = new Failer($destination, $producer, 'billing:order.created');
 
-        $message = new Message('order.created', new Payload(['order_id' => 10]));
-        $transportMessage = new TransportMessageStub();
-        $transportMessage->setRoutingKey('order.created');
-        $message->setTransportMessage($transportMessage);
+        $message = new Message('order.created', new Payload(['order_id' => 10]), ['message_id' => 'msg-fail-1']);
+        $transportMessage = $message->transportMessage();
 
         $exception = new \RuntimeException('Payment gateway error');
         $message->markAsFailed($exception, 'App\\Listeners\\ChargeOrder');
@@ -50,14 +48,32 @@ class FailerTest extends TestCase
 
         // Simulate message after Releaser or RetryCommand where AMQP routingKey was mutated to the queue name
         $message = new Message('order.created', new Payload(['order_id' => 10]));
-        $transportMessage = new TransportMessageStub();
-        $transportMessage->setRoutingKey('billing:order.created');
-        $message->setTransportMessage($transportMessage);
+        $message->setRoutingKey('billing:order.created');
 
         $message->markAsFailed(new \RuntimeException('Failed on attempt 2'));
 
         $failer->send($message);
 
         self::assertEquals('order.created', $message->header('x-original-routing-key'));
+    }
+
+    public function testSendDoesNotThrowWhenFacadeContainerLacksLogBinding(): void
+    {
+        \Illuminate\Support\Facades\Facade::setFacadeApplication(new \Illuminate\Container\Container());
+
+        try {
+            $destination = new DestinationStub('rabbitevents.dlx');
+            $producer = new ProducerStub();
+            $failer = new Failer($destination, $producer, 'billing:order.created');
+
+            $message = new Message('order.created', new Payload(['order_id' => 10]));
+            $message->markAsFailed(new \RuntimeException('Failed without log service'));
+
+            $failer->send($message);
+
+            self::assertCount(1, $producer->sent);
+        } finally {
+            \Illuminate\Support\Facades\Facade::setFacadeApplication(null);
+        }
     }
 }

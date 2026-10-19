@@ -27,8 +27,6 @@ class DeadLetterConfigurator
         $failedQueue = $this->declareFailedQueue($queueName);
 
         $this->bindFailedQueue($exchange, $failedQueue, $queueName);
-
-        $this->applyDeadLetterArguments($queue, $exchange->getTopicName(), $queueName);
     }
 
     protected function shouldConfigure(string $queueName): bool
@@ -59,11 +57,5 @@ class DeadLetterConfigurator
     protected function bindFailedQueue(AmqpTopic $exchange, AmqpQueue $failedQueue, string $queueName): void
     {
         $this->context->bind(new AmqpBind($exchange, $failedQueue, $queueName));
-    }
-
-    protected function applyDeadLetterArguments(AmqpQueue $queue, string $exchangeName, string $queueName): void
-    {
-        $queue->setArgument('x-dead-letter-exchange', $exchangeName);
-        $queue->setArgument('x-dead-letter-routing-key', $queueName);
     }
 }

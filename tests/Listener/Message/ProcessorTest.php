@@ -220,63 +220,137 @@ class ProcessorTest extends TestCase
         }
 
         $app = new \Illuminate\Container\Container();
-        $contextMock = m::mock();
-        $contextMock->shouldReceive('all')->andReturn(['worker_key' => 'worker_val']);
-        $contextMock->shouldReceive('allHidden')->andReturn(['hidden_key' => 'hidden_val']);
-        $contextMock->shouldReceive('add')->with(['trace_id' => '12345'])->once();
-        $contextMock->shouldReceive('flush')->once();
-        $contextMock->shouldReceive('add')->with(['worker_key' => 'worker_val'])->once();
-        $contextMock->shouldReceive('addHidden')->with(['hidden_key' => 'hidden_val'])->once();
-        $app->instance(\Illuminate\Log\Context\Repository::class, $contextMock);
+        $realRepository = new \Illuminate\Log\Context\Repository(new Dispatcher($app));
+        $app->instance(\Illuminate\Log\Context\Repository::class, $realRepository);
         \Illuminate\Support\Facades\Facade::setFacadeApplication($app);
 
         try {
-            $transportMessage = m::mock(\RabbitEvents\Foundation\Contracts\TransportMessage::class);
-            $transportMessage->shouldReceive('getHeader')->with('trace_context', null)->andReturn([
-                'trace_id' => '12345',
-            ]);
-            $transportMessage->shouldReceive('getHeader')->with('x-succeeded-listeners', [])->andReturn([]);
-            $transportMessage->shouldReceive('getMessageId')->andReturn('msg-ctx');
+            \Illuminate\Support\Facades\Context::add('worker_key', 'worker_val');
+            \Illuminate\Support\Facades\Context::addHidden('hidden_key', 'hidden_val');
 
-            $message = (new Message('test.event', new Payload([])))->setTransportMessage($transportMessage);
-
-            $this->mockListeners([
-                static fn() => true,
+            $message = new Message('test.event', new Payload(['hello' => 'world']), [
+                'message_id' => 'msg-ctx',
+                'headers' => [
+                    'trace_context' => ['trace_id' => '12345'],
+                ],
             ]);
 
-            $processor = new Processor(new FakeHandlerFactory(), $this->events, $this->dispatcher);
+            $dispatcher = new RabbitEventsDispatcher($app);
+            $observedTraceId = null;
+            $observedWorkerKey = null;
+
+            $dispatcher->listen('test.event', function () use (&$observedTraceId, &$observedWorkerKey) {
+                $observedTraceId = \Illuminate\Support\Facades\Context::get('trace_id');
+                $observedWorkerKey = \Illuminate\Support\Facades\Context::get('worker_key');
+            });
+
+            $handlerFactory = new HandlerFactory(
+                $app,
+                new \RabbitEvents\Listener\Support\Releaser(
+                    new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('test-queue'),
+                    new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub()
+                )
+            );
+
+            $processor = new Processor($handlerFactory, new Dispatcher($app), $dispatcher);
             $processor->process($message, $this->options());
+
+            self::assertSame('12345', $observedTraceId);
+            self::assertSame('worker_val', $observedWorkerKey);
+            self::assertNull(\Illuminate\Support\Facades\Context::get('trace_id'));
+            self::assertSame('worker_val', \Illuminate\Support\Facades\Context::get('worker_key'));
+            self::assertSame('hidden_val', \Illuminate\Support\Facades\Context::getHidden('hidden_key'));
         } finally {
             \Illuminate\Support\Facades\Facade::clearResolvedInstances();
             \Illuminate\Support\Facades\Facade::setFacadeApplication(null);
         }
     }
 
-    public function testProcessSkipsAlreadySucceededListenersAndRecordsNewOnes(): void
+    public function testProcessSkipsAlreadySucceededListenersAcrossRetriesWithRealComponents(): void
     {
-        $listener1 = new class {
-            public function __invoke() { return true; }
-        };
-        $listener2 = new class {
-            public function __invoke() { return true; }
-        };
+        $app = new \Illuminate\Container\Container();
+        $dispatcher = new RabbitEventsDispatcher($app);
 
-        $class1 = get_class($listener1);
-        $class2 = get_class($listener2);
+        FirstRealListener::$calls = 0;
+        SecondFailingRealListener::$calls = 0;
 
-        $this->message->setHeader('x-succeeded-listeners', [$class1]);
+        $dispatcher->listen('order.created', FirstRealListener::class);
+        $dispatcher->listen('order.created', SecondFailingRealListener::class);
 
-        $this->mockListeners([$listener1, $listener2]);
+        $releaseProducer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub();
+        $releaser = new \RabbitEvents\Listener\Support\Releaser(
+            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders-queue'),
+            $releaseProducer
+        );
+        $handlerFactory = new HandlerFactory($app, $releaser);
+        $processor = new Processor($handlerFactory, new Dispatcher($app), $dispatcher);
 
-        $handlerFactory = new FakeHandlerFactory();
-        $processor = new Processor($handlerFactory, $this->events, $this->dispatcher);
+        $options = new ListenerOptions('test-app', 'rabbitmq', ['order.created'], maxTries: 2, sleep: 0);
+        $message = new Message('order.created', new Payload(['order_id' => 99]), ['message_id' => 'msg-retry-1']);
 
-        $processor->process($this->message, $this->options());
+        // Attempt 1 (Consumer::nextMessage increments attempts to 1):
+        // FirstRealListener succeeds, SecondFailingRealListener throws -> message is released for retry
+        $message->increaseAttempts();
+        try {
+            $processor->process($message, $options);
+            self::fail('Expected RuntimeException on first attempt');
+        } catch (\RuntimeException $e) {
+            self::assertSame('Second listener boom', $e->getMessage());
+        }
 
-        // Only listener2 should have been executed
-        self::assertCount(1, $handlerFactory->handlers);
-        self::assertTrue($handlerFactory->handlers[0]->fired);
-        self::assertEquals([$class1, $class2], $this->message->header('x-succeeded-listeners'));
+        self::assertSame(1, FirstRealListener::$calls);
+        self::assertSame(1, SecondFailingRealListener::$calls);
+        self::assertCount(1, $releaseProducer->sent, 'Message should have been released back to queue');
+        self::assertSame([FirstRealListener::class], $message->header('x-succeeded-listeners'));
+        self::assertFalse($message->hasFailed());
+
+        // Attempt 2 (Consumer::nextMessage increments attempts to 2):
+        // FirstRealListener is skipped because it already succeeded; SecondFailingRealListener fails permanently
+        $message->increaseAttempts();
+        try {
+            $processor->process($message, $options);
+            self::fail('Expected RuntimeException on second attempt');
+        } catch (\RuntimeException $e) {
+            self::assertSame('Second listener boom', $e->getMessage());
+        }
+
+        self::assertSame(1, FirstRealListener::$calls, 'First listener must NOT be re-executed on retry');
+        self::assertSame(2, SecondFailingRealListener::$calls);
+        self::assertTrue($message->hasFailed(), 'Message must be marked as failed after exhausting maxTries');
+
+        // Verify Failer writes the failing listener class and diagnostic headers
+        $dlxProducer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub();
+        $failer = new \RabbitEvents\Listener\Support\Failer(
+            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('rabbitevents.dlx'),
+            $dlxProducer,
+            'orders-queue'
+        );
+        $failer->send($message);
+
+        self::assertSame(SecondFailingRealListener::class, $message->header('x-listener'));
+        self::assertSame('Second listener boom', $message->header('x-exception-message'));
+        self::assertSame('order.created', $message->header('x-original-routing-key'));
+    }
+}
+
+class FirstRealListener
+{
+    public static int $calls = 0;
+
+    public function handle(array $payload = []): void
+    {
+        self::$calls++;
+    }
+}
+
+class SecondFailingRealListener
+{
+    public static int $calls = 0;
+
+    public function handle(array $payload = []): void
+    {
+        self::$calls++;
+        throw new \RuntimeException('Second listener boom');
     }
 }
 

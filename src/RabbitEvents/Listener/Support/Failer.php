@@ -28,7 +28,7 @@ class Failer extends Sender
         $exceptionMessage = $exception ? $exception->getMessage() : 'N/A';
         $exceptionTrace = $exception ? $exception->getTraceAsString() : '';
 
-        if (Facade::getFacadeApplication()) {
+        if (Facade::getFacadeApplication()?->bound('log')) {
             Log::warning(sprintf(
                 'RabbitEvents: Message [%s] for event [%s] failed after %d attempts. Dead-lettering to [%s]. Exception: %s: %s',
                 $message->id() ?? 'unknown',

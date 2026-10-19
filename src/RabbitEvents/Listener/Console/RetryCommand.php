@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Str;
 use RabbitEvents\Foundation\Consumer;
 use RabbitEvents\Foundation\Context;
 use RabbitEvents\Foundation\Contracts\Destination;
@@ -23,7 +24,6 @@ class RetryCommand extends Command
      */
     protected $signature = 'rabbitevents:retry
                             {id? : The ID of the failed message to retry or "all"}
-                            {events? : The events the queue was listening for}
                             {--events= : The events the queue was listening for}
                             {--all : Retry all failed messages}
                             {--queue= : The failed queue name (e.g. service:events.failed)}
@@ -90,7 +90,7 @@ class RetryCommand extends Command
             }
 
             return true;
-        });
+        }, maxScan: is_null($targetId) ? PHP_INT_MAX : 10000);
 
         return $retried;
     }
@@ -108,6 +108,10 @@ class RetryCommand extends Command
         $message->setRoutingKey($routingKey);
         $message->setProperty('event', $routingKey);
         $message->setProperty('x-attempts', 0);
+
+        if ($message->header('x-deduplication-header')) {
+            $message->setHeader('x-deduplication-header', (string) Str::uuid());
+        }
 
         (new Sender($destination, $producer))->send($message);
     }

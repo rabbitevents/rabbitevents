@@ -31,6 +31,10 @@ class QueueConsumerStub implements QueueConsumer
     public function reject(TransportMessage $message, bool $requeue = false): void
     {
         $this->rejected[] = ['message' => $message, 'requeue' => $requeue];
+
+        if ($requeue) {
+            array_unshift($this->messages, $message);
+        }
     }
     
     public function addMessage(TransportMessage $message): void

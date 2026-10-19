@@ -22,8 +22,10 @@ class RetryCommandTest extends FailedQueueTestCase
     public function test_retries_single_message_by_id(): void
     {
         $app = $this->createMockApplication();
-        $transportMsg = $this->createFailedTransportMessage('msg-123', 'order.created');
-        [$context, $producer, $consumer] = $this->createContext([$transportMsg]);
+        $msg1 = $this->createFailedTransportMessage('msg-first', 'user.created');
+        $msgNull = $this->createFailedTransportMessage(null, 'legacy.event');
+        $targetMsg = $this->createFailedTransportMessage('msg-123', 'order.created');
+        [$context, $producer, $consumer] = $this->createContext([$msg1, $msgNull, $targetMsg]);
         $app->instance(Context::class, $context);
 
         [$result, $output] = $this->runCommand(new RetryCommand(), $app, ['id' => 'msg-123']);
@@ -37,6 +39,8 @@ class RetryCommandTest extends FailedQueueTestCase
         self::assertEquals('order.created', $producer->sent[0]['message']->getProperty('event'));
         self::assertEquals('order.created', $producer->sent[0]['message']->getRoutingKey());
         self::assertCount(1, $consumer->acknowledged);
+        // The two non-matching messages must be requeued back into the queue
+        self::assertCount(2, $consumer->messages);
     }
 
     public function test_retries_all_messages(): void
@@ -56,6 +60,7 @@ class RetryCommandTest extends FailedQueueTestCase
 
         self::assertCount(2, $producer->sent);
         self::assertCount(2, $consumer->acknowledged);
+        self::assertCount(0, $consumer->messages);
     }
 
     public function test_retries_message_to_queue_extracted_from_x_death(): void
@@ -80,7 +85,8 @@ class RetryCommandTest extends FailedQueueTestCase
     {
         $app = $this->createMockApplication();
         $msg1 = $this->createFailedTransportMessage('msg-1', 'order.created');
-        [$context, $producer, $consumer] = $this->createContext([$msg1]);
+        $msgNull = $this->createFailedTransportMessage(null, 'legacy.event');
+        [$context, $producer, $consumer] = $this->createContext([$msg1, $msgNull]);
         $app->instance(Context::class, $context);
 
         [$result, $output] = $this->runCommand(new RetryCommand(), $app, ['id' => 'nonexistent-id']);
@@ -88,6 +94,7 @@ class RetryCommandTest extends FailedQueueTestCase
         self::assertEquals(1, $result);
         self::assertStringContainsString('Failed message [nonexistent-id] not found.', $output);
         self::assertCount(0, $producer->sent);
-        self::assertCount(1, $consumer->rejected);
+        self::assertCount(2, $consumer->rejected);
+        self::assertCount(2, $consumer->messages);
     }
 }

@@ -218,26 +218,49 @@ class WorkerTest extends TestCase
 
     public function testWorkUsesFailerWhenMessageHasFailed(): void
     {
+        $app = Container::getInstance();
         $worker = new Worker($this->exceptionHandler, $this->events);
         $worker->shouldQuit = true;
 
-        $failer = m::mock(\RabbitEvents\Foundation\Contracts\Transport::class);
+        $dlxProducer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub();
+        $failer = new \RabbitEvents\Listener\Support\Failer(
+            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('rabbitevents.dlx'),
+            $dlxProducer,
+            'orders-queue'
+        );
         $worker->setFailer($failer);
 
-        $processor = m::spy(Processor::class);
-        $message = m::mock(Message::class);
-        $message->shouldReceive('attempts')->andReturn(1);
-        $message->shouldReceive('hasFailed')->andReturn(true);
+        $dispatcher = new Dispatcher($app);
+        $dispatcher->listen('order.failed', static function () {
+            throw new \RuntimeException('Permanent listener failure');
+        });
 
-        $consumer = m::mock(Consumer::class);
-        $consumer->shouldReceive('nextMessage')->andReturn($message);
-        $failer->shouldReceive('send')->with($message)->once();
-        $consumer->shouldReceive('acknowledge')->with($message)->once();
-        $consumer->shouldNotReceive('reject');
+        $handlerFactory = new \RabbitEvents\Listener\Message\HandlerFactory(
+            $app,
+            new \RabbitEvents\Listener\Support\Releaser(
+                new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders-queue'),
+                new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub()
+            )
+        );
+        $processor = new Processor($handlerFactory, new \Illuminate\Events\Dispatcher($app), $dispatcher);
 
-        $status = $worker->work($processor, $consumer, $this->options);
+        $registry = new \RabbitEvents\Foundation\Serialization\SerializerRegistry();
+        $registry->register(new \RabbitEvents\Foundation\Serialization\JsonSerializer());
+
+        $incomingMessage = new Message('order.failed', new \RabbitEvents\Foundation\Support\JsonPayload(['id' => 1]), ['message_id' => 'msg-w1']);
+        $queueConsumer = new \RabbitEvents\Tests\Foundation\Stubs\QueueConsumerStub([$incomingMessage->transportMessage()]);
+        $consumer = new Consumer($queueConsumer, $registry);
+
+        $options = $this->createListenerOptions(['maxTries' => 1]);
+
+        $status = $worker->work($processor, $consumer, $options);
 
         self::assertEquals(WorkerExitStatus::SUCCESS, $status);
+        self::assertCount(1, $dlxProducer->sent, 'Failer must send failed message to DLX');
+        self::assertSame('Permanent listener failure', $dlxProducer->sent[0]['message']->getHeader('x-exception-message'));
+        self::assertSame('order.failed', $dlxProducer->sent[0]['message']->getHeader('x-original-routing-key'));
+        self::assertCount(1, $queueConsumer->acknowledged, 'Original message must be acknowledged after Failer publishes to DLX');
+        self::assertCount(0, $queueConsumer->rejected, 'Original message must NOT be rejected when Failer handles it');
     }
 }
 

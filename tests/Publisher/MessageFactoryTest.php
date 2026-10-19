@@ -70,35 +70,37 @@ class MessageFactoryTest extends TestCase
         self::assertNotNull($message->id());
     }
 
-    public function testMakeSanitizesContextObjects(): void
+    public function testMakeSanitizesContextObjectsAndEncodesIntoAmqpTable(): void
     {
         if (!class_exists(\Illuminate\Support\Facades\Context::class)) {
             self::markTestSkipped('Context facade not available');
         }
 
         $app = new \Illuminate\Container\Container();
-        $contextMock = \Mockery::mock();
-        $contextMock->shouldReceive('all')->andReturn([
-            'scalar' => 'val',
-            'obj' => (object) ['foo' => 'bar'],
-            'json_obj' => new class implements \JsonSerializable {
-                public function jsonSerialize(): mixed { return ['serialized' => 123]; }
-            },
-            'stringable' => new class {
-                public function __toString(): string { return 'str-obj'; }
-            },
-        ]);
-        $app->instance(\Illuminate\Log\Context\Repository::class, $contextMock);
+        $realRepository = new \Illuminate\Log\Context\Repository(new \Illuminate\Events\Dispatcher($app));
+        $app->instance(\Illuminate\Log\Context\Repository::class, $realRepository);
         \Illuminate\Support\Facades\Facade::setFacadeApplication($app);
 
         try {
-            $payload = new JsonPayload([]);
-            $serializer = \Mockery::mock(\RabbitEvents\Foundation\Contracts\Serializer::class);
-            $serializer->shouldReceive('serialize')->andReturn($payload);
-            $serializer->shouldReceive('contentType')->andReturn(new \RabbitEvents\Foundation\Serialization\JsonContentType());
+            \Illuminate\Support\Facades\Context::add([
+                'scalar' => 'val',
+                'obj' => (object) ['foo' => 'bar'],
+                'json_obj' => new class implements \JsonSerializable {
+                    public function jsonSerialize(): mixed { return ['serialized' => 123]; }
+                },
+                'stringable' => new class {
+                    public function __toString(): string { return 'str-obj'; }
+                },
+                'model' => new class implements \Illuminate\Contracts\Queue\QueueableEntity, \JsonSerializable {
+                    public function getQueueableId(): mixed { return 42; }
+                    public function getQueueableRelations(): array { return []; }
+                    public function getQueueableConnection(): ?string { return null; }
+                    public function jsonSerialize(): mixed { return ['id' => 42, 'secret' => 'do-not-leak']; }
+                },
+            ]);
 
-            $registry = \Mockery::mock(\RabbitEvents\Foundation\Serialization\SerializerRegistry::class);
-            $registry->shouldReceive('resolve')->andReturn($serializer);
+            $registry = new \RabbitEvents\Foundation\Serialization\SerializerRegistry();
+            $registry->register(new \RabbitEvents\Foundation\Serialization\JsonSerializer());
 
             $factory = new MessageFactory($registry);
             $message = $factory->make(new Event());
@@ -109,7 +111,13 @@ class MessageFactoryTest extends TestCase
                 'obj' => ['foo' => 'bar'],
                 'json_obj' => ['serialized' => 123],
                 'stringable' => 'str-obj',
-            ], $traceContext);
+            ], array_diff_key($traceContext, ['model' => true]));
+            self::assertStringEndsWith(':42', $traceContext['model']);
+            self::assertStringNotContainsString('do-not-leak', json_encode($traceContext));
+
+            // Prove that real php-amqplib AMQPTable accepts the produced AMQP properties without throwing AMQPInvalidArgumentException
+            $table = new \PhpAmqpLib\Wire\AMQPTable($message->transportMessage()->getProperties());
+            self::assertArrayHasKey('trace_context', $table->getNativeData());
         } finally {
             \Illuminate\Support\Facades\Facade::clearResolvedInstances();
             \Illuminate\Support\Facades\Facade::setFacadeApplication(null);

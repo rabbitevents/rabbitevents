@@ -81,7 +81,9 @@ class Dispatcher extends BaseDispatcher
     protected function normalizeListenerForComparison($listener): string
     {
         if (is_array($listener)) {
-            return $listener[0] . '@' . ($listener[1] ?? 'handle');
+            $target = is_object($listener[0]) ? spl_object_hash($listener[0]) : $listener[0];
+
+            return $target . '@' . ($listener[1] ?? 'handle');
         }
 
         if (is_string($listener)) {
@@ -97,7 +99,7 @@ class Dispatcher extends BaseDispatcher
             return $listener . '@handle';
         }
 
-        if ($listener instanceof Closure) {
+        if (is_object($listener)) {
             return spl_object_hash($listener);
         }
 
@@ -140,6 +142,11 @@ class Dispatcher extends BaseDispatcher
 
     protected static array $middlewareExpectsNextCache = [];
 
+    /**
+     * @var \WeakMap<object, bool>|null
+     */
+    protected static ?\WeakMap $objectMiddlewareExpectsNextCache = null;
+
     protected function wrapMiddlewareIntoPipelineStage(callable $middleware, string $event, bool $wildcard): Closure
     {
         $expectsNext = $this->middlewareExpectsNext($middleware);
@@ -165,12 +172,28 @@ class Dispatcher extends BaseDispatcher
 
     protected function middlewareExpectsNext(callable $middleware): bool
     {
-        $key = is_array($middleware)
-            ? (is_object($middleware[0]) ? get_class($middleware[0]) : $middleware[0]) . '@' . $middleware[1]
-            : ($middleware instanceof \Closure ? spl_object_hash($middleware) : (string) $middleware);
+        $key = null;
 
-        if (isset(static::$middlewareExpectsNextCache[$key])) {
-            return static::$middlewareExpectsNextCache[$key];
+        if (is_array($middleware)) {
+            $key = (is_object($middleware[0]) ? get_class($middleware[0]) : $middleware[0]) . '@' . $middleware[1];
+            if (isset(static::$middlewareExpectsNextCache[$key])) {
+                return static::$middlewareExpectsNextCache[$key];
+            }
+        } elseif ($middleware instanceof Closure) {
+            static::$objectMiddlewareExpectsNextCache ??= new \WeakMap();
+            if (isset(static::$objectMiddlewareExpectsNextCache[$middleware])) {
+                return static::$objectMiddlewareExpectsNextCache[$middleware];
+            }
+        } elseif (is_object($middleware)) {
+            $key = get_class($middleware) . '@__invoke';
+            if (isset(static::$middlewareExpectsNextCache[$key])) {
+                return static::$middlewareExpectsNextCache[$key];
+            }
+        } else {
+            $key = (string) $middleware;
+            if (isset(static::$middlewareExpectsNextCache[$key])) {
+                return static::$middlewareExpectsNextCache[$key];
+            }
         }
 
         $reflector = is_array($middleware)
@@ -197,6 +220,10 @@ class Dispatcher extends BaseDispatcher
                     }
                 }
             }
+        }
+
+        if ($middleware instanceof Closure) {
+            return static::$objectMiddlewareExpectsNextCache[$middleware] = $expectsNext;
         }
 
         return static::$middlewareExpectsNextCache[$key] = $expectsNext;
@@ -252,12 +279,12 @@ class Dispatcher extends BaseDispatcher
             return [$mixed, 'middleware'];
         }
 
-        if (is_object($mixed) && method_exists($mixed, 'handle')) {
-            return [$mixed, 'handle'];
-        }
-
         if (is_callable($mixed)) {
             return $mixed;
+        }
+
+        if (is_object($mixed) && method_exists($mixed, 'handle')) {
+            return [$mixed, 'handle'];
         }
 
         if (is_string($mixed)) {

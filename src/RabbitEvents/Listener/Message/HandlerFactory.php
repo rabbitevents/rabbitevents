@@ -22,6 +22,7 @@ class HandlerFactory
 
         if (
             $listenerClass !== \Closure::class
+            && (!class_exists($listenerClass) || method_exists($listenerClass, 'failed'))
             && method_exists($listener = $this->container->make($listenerClass), 'failed')
         ) {
             $failedCallback = [$listener, 'failed'];

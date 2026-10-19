@@ -58,6 +58,10 @@ class MessageFactory
                 return $this->sanitizeContextData($value);
             }
 
+            if ($value instanceof \Illuminate\Contracts\Queue\QueueableEntity) {
+                return get_class($value) . ':' . $value->getQueueableId();
+            }
+
             if ($value instanceof \JsonSerializable) {
                 $serialized = $value->jsonSerialize();
                 return is_array($serialized) ? $this->sanitizeContextData($serialized) : (string) $serialized;

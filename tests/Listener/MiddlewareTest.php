@@ -213,6 +213,80 @@ class MiddlewareTest extends TestCase
         self::assertEquals('middleware', $multiMethodMiddleware->calledMethod);
     }
 
+    public function testInvokableObjectAsMiddleware(): void
+    {
+        $invokableMiddleware = new class {
+            public bool $called = false;
+
+            public function __invoke($payload)
+            {
+                $this->called = true;
+                return true;
+            }
+        };
+
+        $listener = new class ($invokableMiddleware) {
+            public array $middleware = [];
+
+            public function __construct($middleware)
+            {
+                $this->middleware = [$middleware];
+            }
+
+            public function handle($payload): string
+            {
+                return "invoked:{$payload}";
+            }
+        };
+
+        $dispatcher = new Dispatcher();
+        $callback = $dispatcher->makeListener([$listener, 'handle']);
+        $handler = $this->makeHandler($this->makeMessage('test'), $callback);
+
+        self::assertEquals('invoked:test', $handler->handle());
+        self::assertTrue($invokableMiddleware->called);
+    }
+
+    public function testInvokableObjectWithHandleMethodPrefersInvokeLike9x(): void
+    {
+        $invokableWithHandle = new class {
+            public string $calledMethod = '';
+
+            public function __invoke($payload)
+            {
+                $this->calledMethod = '__invoke';
+                return true;
+            }
+
+            public function handle($payload)
+            {
+                $this->calledMethod = 'handle';
+                return true;
+            }
+        };
+
+        $listener = new class ($invokableWithHandle) {
+            public array $middleware = [];
+
+            public function __construct($middleware)
+            {
+                $this->middleware = [$middleware];
+            }
+
+            public function handle($payload): string
+            {
+                return "ok:{$payload}";
+            }
+        };
+
+        $dispatcher = new Dispatcher();
+        $callback = $dispatcher->makeListener([$listener, 'handle']);
+        $handler = $this->makeHandler($this->makeMessage('test'), $callback);
+
+        self::assertEquals('ok:test', $handler->handle());
+        self::assertEquals('__invoke', $invokableWithHandle->calledMethod);
+    }
+
     private function makeCallback($listenerClass, $wildcard = false): callable
     {
         return (new Dispatcher())->makeListener($listenerClass, $wildcard);

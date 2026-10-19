@@ -69,13 +69,6 @@ class Connection implements ConnectionContract
         return $this->context;
     }
 
-    public function recreateContext(): Context
-    {
-        $this->context = null;
-
-        return $this->createContext();
-    }
-
     public function createProducer(): Producer
     {
         return new AmqpProducerAdapter($this->createContext()->createProducer());

@@ -39,8 +39,8 @@ class DeadLetterConfiguratorTest extends TestCase
         $configurator = new DeadLetterConfigurator($context, $connection);
         $configurator->configure($queue, $queueName);
 
-        self::assertEquals('rabbitevents.dlx', $queue->getArgument('x-dead-letter-exchange'));
-        self::assertEquals($queueName, $queue->getArgument('x-dead-letter-routing-key'));
+        self::assertNull($queue->getArgument('x-dead-letter-exchange'));
+        self::assertNull($queue->getArgument('x-dead-letter-routing-key'));
         self::assertEquals(AmqpDestination::FLAG_DURABLE, $failedQueue->getFlags());
     }
 

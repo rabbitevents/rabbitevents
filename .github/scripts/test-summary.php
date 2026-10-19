@@ -92,7 +92,52 @@ if (file_exists($coverageFile)) {
         $summary .= "| **Lines / Statements** | {$coveredStatements} | {$statements} | " . $badge($linePct) . " |\n";
         $summary .= "| **Methods / Functions** | {$coveredMethods} | {$methods} | " . $badge($methodPct) . " |\n";
         $summary .= "| **Total Elements** | {$coveredElements} | {$elements} | " . $badge($elemPct) . " |\n\n";
+
+        if (in_array('--badge', $argv ?? [], true)) {
+            generateBadgeSvg($linePct, getcwd() . '/.github/badges/coverage.svg');
+        }
     }
+}
+
+function generateBadgeSvg(float $pct, string $outputPath): void {
+    if ($pct >= 90) {
+        $color = '#4c1'; // bright green
+    } elseif ($pct >= 80) {
+        $color = '#97ca00'; // green
+    } elseif ($pct >= 70) {
+        $color = '#a4a61d'; // yellowgreen
+    } elseif ($pct >= 60) {
+        $color = '#dfb317'; // yellow
+    } else {
+        $color = '#e05d44'; // red
+    }
+
+    $val = $pct . '%';
+    $svg = <<<SVG
+<svg xmlns="http://www.w3.org/2000/svg" width="104" height="20">
+  <linearGradient id="b" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <mask id="a">
+    <rect width="104" height="20" rx="3" fill="#fff"/>
+  </mask>
+  <g mask="url(#a)">
+    <path fill="#555" d="M0 0h61v20H0z"/>
+    <path fill="{$color}" d="M61 0h43v20H61z"/>
+    <path fill="url(#b)" d="M0 0h104v20H0z"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
+    <text x="30.5" y="15" fill="#010101" fill-opacity=".3">coverage</text>
+    <text x="30.5" y="14">coverage</text>
+    <text x="82.5" y="15" fill="#010101" fill-opacity=".3">{$val}</text>
+    <text x="82.5" y="14">{$val}</text>
+  </g>
+</svg>
+SVG;
+
+    @mkdir(dirname($outputPath), 0755, true);
+    file_put_contents($outputPath, $svg);
 }
 
 $summaryFile = getenv('GITHUB_STEP_SUMMARY');
