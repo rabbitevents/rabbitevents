@@ -2,7 +2,6 @@
 
 namespace RabbitEvents\Tests\Listener\Support;
 
-use Interop\Queue\Exception\DeliveryDelayNotSupportedException;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Tests\Foundation\TestCase;
@@ -29,28 +28,31 @@ class ReleaserTest extends TestCase
         $this->producerStub = new ProducerStub();
     }
 
-    public function testDeliveryDelay()
+    public function testDelaysDeliveryWhenTheProducerSupportsIt(): void
     {
         $releaser = new Releaser($this->queueStub, $this->producerStub);
-        
+
         $releaser->setDelay(1);
         $releaser->send($this->message);
-            
-        self::assertEquals(1000, $this->producerStub->deliveryDelay);
+
+        self::assertSame(1, $this->producerStub->deliveryDelay);
         self::assertCount(1, $this->producerStub->sent);
     }
 
-    public function testNotThrowExceptionIfDelayNotSupported(): void
+    public function testSendsRightAwayWhenTheProducerCannotDelay(): void
     {
-        // Simulate exception on setDeliveryDelay
-        $this->producerStub->throwException(new DeliveryDelayNotSupportedException(), 'setDeliveryDelay');
+        $producer = new class implements \RabbitEvents\Foundation\Contracts\Producer {
+            public array $sent = [];
+            public function send(\RabbitEvents\Foundation\Contracts\Destination $destination, \RabbitEvents\Foundation\Contracts\TransportMessage $message): void
+            {
+                $this->sent[] = $message;
+            }
+        };
+        $releaser = new Releaser($this->queueStub, $producer);
 
-        $releaser = new Releaser($this->queueStub, $this->producerStub);
-        
-        $releaser->setDelay(1);
+        $releaser->setDelay(5);
         $releaser->send($this->message);
-            
-        // Should send anyway, despite exception on delay
-        self::assertCount(1, $this->producerStub->sent);
+
+        self::assertCount(1, $producer->sent);
     }
 }

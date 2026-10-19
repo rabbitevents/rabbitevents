@@ -2,11 +2,12 @@
 
 namespace RabbitEvents\Tests\Foundation\Stubs;
 
+use RabbitEvents\Foundation\Contracts\DelaysDelivery;
 use RabbitEvents\Foundation\Contracts\Destination;
 use RabbitEvents\Foundation\Contracts\Producer;
 use RabbitEvents\Foundation\Contracts\TransportMessage;
 
-class ProducerStub implements Producer
+class ProducerStub implements Producer, DelaysDelivery
 {
     public array $sent = [];
     public ?int $deliveryDelay = null;
@@ -21,11 +22,8 @@ class ProducerStub implements Producer
         $this->sent[] = ['destination' => $destination, 'message' => $message];
     }
 
-    public function setDeliveryDelay(int $delay): void
+    public function setDelay(int $delay = 0): void
     {
-        if (isset($this->exceptions['setDeliveryDelay'])) {
-             throw $this->exceptions['setDeliveryDelay'];
-        }
         $this->deliveryDelay = $delay;
     }
     
