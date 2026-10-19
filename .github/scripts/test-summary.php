@@ -4,18 +4,19 @@ $phpVersion = $argv[1] ?? PHP_VERSION;
 $summary = "## 🧪 PHPUnit Test & Coverage Report (PHP {$phpVersion})\n\n";
 
 $junitFile = getcwd() . '/junit.xml';
-if (file_exists($junitFile)) {
+if (file_exists($junitFile) && filesize($junitFile) > 0) {
     $junit = simplexml_load_file($junitFile);
-    $totalTests = 0;
-    $failures = 0;
-    $errors = 0;
-    $skipped = 0;
-    $assertions = 0;
-    $time = 0.0;
-    $failedCases = [];
+    if ($junit !== false) {
+        $totalTests = 0;
+        $failures = 0;
+        $errors = 0;
+        $skipped = 0;
+        $assertions = 0;
+        $time = 0.0;
+        $failedCases = [];
 
-    // Traverse all testsuites
-    $suites = $junit->xpath('//testsuite');
+        // Traverse all testsuites
+        $suites = $junit->xpath('//testsuite');
     foreach ($suites as $suite) {
         if (isset($suite->testcase)) {
             foreach ($suite->testcase as $case) {
@@ -53,20 +54,21 @@ if (file_exists($junitFile)) {
     $summary .= "|:------:|:-----:|:------:|:------:|:------:|:-------:|:----------:|:--------:|\n";
     $summary .= "| {$statusIcon} | **{$totalTests}** | {$passed} | {$failures} | {$errors} | {$skipped} | {$assertions} | {$timeFormatted} |\n\n";
 
-    if (!empty($failedCases)) {
-        $summary .= "<details><summary>❌ <b>Failed Tests (" . count($failedCases) . ")</b></summary>\n\n";
-        foreach ($failedCases as $failed) {
-            $summary .= "#### `{$failed['class']}::{$failed['name']}`\n";
-            $summary .= "```\n" . substr($failed['message'], 0, 1000) . "\n```\n\n";
+        if (!empty($failedCases)) {
+            $summary .= "<details><summary>❌ <b>Failed Tests (" . count($failedCases) . ")</b></summary>\n\n";
+            foreach ($failedCases as $failed) {
+                $summary .= "#### `{$failed['class']}::{$failed['name']}`\n";
+                $summary .= "```\n" . substr($failed['message'], 0, 1000) . "\n```\n\n";
+            }
+            $summary .= "</details>\n\n";
         }
-        $summary .= "</details>\n\n";
     }
 }
 
 $coverageFile = getcwd() . '/coverage.xml';
-if (file_exists($coverageFile)) {
+if (file_exists($coverageFile) && filesize($coverageFile) > 0) {
     $clover = simplexml_load_file($coverageFile);
-    if (isset($clover->project->metrics)) {
+    if ($clover !== false && isset($clover->project->metrics)) {
         $m = $clover->project->metrics;
         $statements = (int) ($m['statements'] ?? 0);
         $coveredStatements = (int) ($m['coveredstatements'] ?? 0);
