@@ -18,6 +18,8 @@ class HandlerFactoryTest extends TestCase
         $message = new Message('item.created', new Payload([]));
 
         $container = m::mock(Container::class);
+        // 'ClassName' is a container binding, not a class.
+        $container->shouldReceive('bound')->with('ClassName')->andReturn(true);
         $container->shouldReceive('make')->with('ClassName')->andReturn(new \stdClass());
 
         $factory = new HandlerFactory($container, m::mock(\RabbitEvents\Listener\Support\Releaser::class));
@@ -26,5 +28,17 @@ class HandlerFactoryTest extends TestCase
         self::assertInstanceOf(Handler::class, $handler);
 
         self::assertSame($message, $handler->message);
+    }
+
+    public function testAcceptsAnyCallableAndDoesNotBuildFunctionNamesAsClasses(): void
+    {
+        $container = \Mockery::mock(\Illuminate\Contracts\Container\Container::class);
+        $container->shouldReceive('bound')->with('strtoupper')->andReturn(false);
+        $container->shouldNotReceive('make');
+
+        $handler = (new HandlerFactory($container, m::mock(\RabbitEvents\Listener\Support\Releaser::class)))
+            ->make(new \RabbitEvents\Foundation\Message('e', new \RabbitEvents\Foundation\Support\JsonPayload([])), 'strtoupper', 'strtoupper');
+
+        self::assertInstanceOf(\RabbitEvents\Listener\Message\Handler::class, $handler);
     }
 }

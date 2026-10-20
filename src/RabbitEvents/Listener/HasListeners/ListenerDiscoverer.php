@@ -23,6 +23,11 @@ class ListenerDiscoverer
      */
     public static function discover(string $path, string $basePath, string $baseNamespace): array
     {
+        // Laravel 11+ applications have no app/Listeners directory by default.
+        if (!is_dir($path)) {
+            return [];
+        }
+
         $listeners = [];
 
         $iterator = new RecursiveIteratorIterator(

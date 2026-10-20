@@ -19,4 +19,10 @@ class ListenerDiscovererTest extends TestCase
 
         self::assertContains(TestListener::class, $listeners);
     }
+
+    public function testDiscoverReturnsNothingWhenTheDirectoryDoesNotExist(): void
+    {
+        // Laravel 11+ applications have no app/Listeners directory by default.
+        self::assertSame([], ListenerDiscoverer::discover(__DIR__ . '/missing', __DIR__, 'App\\'));
+    }
 }

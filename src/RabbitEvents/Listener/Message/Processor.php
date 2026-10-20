@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace RabbitEvents\Listener\Message;
 
-use Illuminate\Events\Dispatcher as EventsDispatcher;
+use Illuminate\Contracts\Events\Dispatcher as EventsDispatcher;
 use RabbitEvents\Listener\Dispatcher;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Facade;
@@ -47,19 +47,19 @@ class Processor
             $succeededListeners = (array) $message->getProperty('x-succeeded-listeners', []);
 
             foreach ($this->dispatcher->getListeners($message->event) as $listener) {
-                $listenerClass = $this->getListenerClass($listener);
+                $listenerId = $this->getListenerId($listener);
 
-                if ($listenerClass !== 'Closure' && in_array($listenerClass, $succeededListeners, true)) {
+                if ($listenerId !== null && in_array($listenerId, $succeededListeners, true)) {
                     continue;
                 }
 
                 $response = $this->runHandler(
-                    $this->handlerFactory->make($message, $listener, $listenerClass),
+                    $this->handlerFactory->make($message, $listener, $this->getListenerClass($listener)),
                     $options
                 );
 
-                if ($listenerClass !== 'Closure') {
-                    $succeededListeners[] = $listenerClass;
+                if ($listenerId !== null) {
+                    $succeededListeners[] = $listenerId;
                     $message->setProperty('x-succeeded-listeners', array_values(array_unique($succeededListeners)));
                 }
 
@@ -102,28 +102,43 @@ class Processor
 
     protected function getListenerClass(mixed $listener): string
     {
-        if ($listener instanceof \Closure) {
-            $used = (new \ReflectionFunction($listener))->getStaticVariables();
-            if (isset($used['listener']) && !$used['listener'] instanceof \Closure) {
-                return $this->getListenerClass($used['listener']);
-            }
+        return $this->getListenerCallback($listener)[0];
+    }
 
-            return \Closure::class;
+    /**
+     * Identifies a listener in `x-succeeded-listeners` as Class@method, so that methods of one subscriber are
+     * tracked separately. It must be stable across processes. Closures can't be identified (null).
+     */
+    protected function getListenerId(mixed $listener): ?string
+    {
+        [$class, $method] = $this->getListenerCallback($listener);
+
+        return $class === \Closure::class ? null : $class . '@' . ($method ?? 'handle');
+    }
+
+    /**
+     * @return array{string, string|null} The listener class (\Closure::class for closures) and method
+     */
+    private function getListenerCallback(mixed $listener): array
+    {
+        if ($listener instanceof \Closure) {
+            // Dispatcher::makeListener() wraps the registered listener into a closure.
+            $used = (new \ReflectionFunction($listener))->getStaticVariables();
+
+            return isset($used['listener']) && !$used['listener'] instanceof \Closure
+                ? $this->getListenerCallback($used['listener'])
+                : [\Closure::class, null];
         }
 
         if (is_string($listener)) {
-            return \Illuminate\Support\Str::parseCallback($listener)[0];
+            return \Illuminate\Support\Str::parseCallback($listener);
         }
 
         if (is_array($listener)) {
-            return is_object($listener[0]) ? get_class($listener[0]) : $listener[0];
+            return [is_object($listener[0]) ? get_class($listener[0]) : $listener[0], $listener[1] ?? null];
         }
 
-        if (is_object($listener)) {
-            return get_class($listener);
-        }
-
-        return \Closure::class;
+        return is_object($listener) ? [get_class($listener), '__invoke'] : [\Closure::class, null];
     }
 
     /**

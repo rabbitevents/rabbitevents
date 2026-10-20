@@ -325,7 +325,7 @@ class ProcessorTest extends TestCase
         self::assertSame(1, FirstRealListener::$calls);
         self::assertSame(1, SecondFailingRealListener::$calls);
         self::assertCount(1, $releaseProducer->sent, 'Message should have been released back to queue');
-        self::assertSame([FirstRealListener::class], $message->getProperty('x-succeeded-listeners'));
+        self::assertSame([FirstRealListener::class . '@handle'], $message->getProperty('x-succeeded-listeners'));
         self::assertFalse($message->hasFailed());
 
         // Attempt 2 (Consumer::nextMessage increments attempts to 2):
@@ -353,6 +353,60 @@ class ProcessorTest extends TestCase
         self::assertSame(SecondFailingRealListener::class, $message->getProperty('x-listener'));
         self::assertSame('Second listener boom', $message->getProperty('x-exception-message'));
         self::assertSame('order.created', $message->getProperty('x-original-routing-key'));
+    }
+
+    public function testMethodsOfOneSubscriberAreTrackedSeparately(): void
+    {
+        $app = new \Illuminate\Container\Container();
+        $dispatcher = new RabbitEventsDispatcher($app);
+        $dispatcher->listen('order.created', [SubscriberWithTwoMethodsOnOneEvent::class, 'first']);
+        $dispatcher->listen('order.created', [SubscriberWithTwoMethodsOnOneEvent::class, 'second']);
+        SubscriberWithTwoMethodsOnOneEvent::$calls = [];
+        SubscriberWithTwoMethodsOnOneEvent::$failSecond = true;
+
+        $releaser = new \RabbitEvents\Listener\Support\Releaser(
+            new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders-queue'),
+            new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub()
+        );
+        $processor = new Processor(new HandlerFactory($app, $releaser), new Dispatcher($app), $dispatcher);
+        $options = new ListenerOptions('test-app', 'rabbitmq', ['order.created'], maxTries: 3, sleep: 0);
+        $message = (new Message('order.created', new Payload(['order_id' => 1]), ['message_id' => 'm-1']))->increaseAttempts();
+
+        try {
+            $processor->process($message, $options);
+        } catch (\RuntimeException) {
+        }
+
+        // The second method ran on the first delivery although the first one had succeeded.
+        self::assertSame(['first', 'second'], SubscriberWithTwoMethodsOnOneEvent::$calls);
+        self::assertSame([SubscriberWithTwoMethodsOnOneEvent::class . '@first'], $message->getProperty('x-succeeded-listeners'));
+
+        // On retry only the method that failed runs again.
+        SubscriberWithTwoMethodsOnOneEvent::$calls = [];
+        SubscriberWithTwoMethodsOnOneEvent::$failSecond = false;
+        $processor->process($message->increaseAttempts(), $options);
+
+        self::assertSame(['second'], SubscriberWithTwoMethodsOnOneEvent::$calls);
+    }
+}
+
+class SubscriberWithTwoMethodsOnOneEvent
+{
+    public static array $calls = [];
+    public static bool $failSecond = false;
+
+    public function first(array $payload = []): void
+    {
+        self::$calls[] = 'first';
+    }
+
+    public function second(array $payload = []): void
+    {
+        self::$calls[] = 'second';
+
+        if (self::$failSecond) {
+            throw new \RuntimeException('Second method boom');
+        }
     }
 }
 

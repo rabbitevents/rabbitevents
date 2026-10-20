@@ -287,6 +287,66 @@ class MiddlewareTest extends TestCase
         self::assertEquals('__invoke', $invokableWithHandle->calledMethod);
     }
 
+    public function testOnionMiddlewareReceivesThePayloadLikeTheListener(): void
+    {
+        $middleware = new class {
+            public mixed $received = null;
+
+            public function handle($payload, \Closure $next)
+            {
+                $this->received = $payload;
+
+                return $next(['user_id' => $payload['user_id'] + 1]);
+            }
+        };
+        $listener = new class ($middleware) {
+            public array $middleware;
+            public function __construct($middleware) { $this->middleware = [$middleware]; }
+            public function handle(array $payload): array { return $payload; }
+        };
+
+        $handler = $this->makeHandler($this->makeMessage(['user_id' => 1]), $this->makeCallback([$listener, 'handle']));
+
+        self::assertSame(['user_id' => 2], $handler->handle());
+        self::assertSame(['user_id' => 1], $middleware->received);
+    }
+
+    public function testWildcardFilterMiddlewareReceivesEventAndPayload(): void
+    {
+        $middleware = new class {
+            public array $received = [];
+
+            public function handle(...$args): bool
+            {
+                $this->received = $args;
+
+                return true;
+            }
+        };
+        $listener = new class ($middleware) {
+            public array $middleware;
+            public function __construct($middleware) { $this->middleware = [$middleware]; }
+            public function handle(string $event, array $payload): array { return $payload; }
+        };
+
+        $handler = $this->makeHandler($this->makeMessage(['user_id' => 1, 'email' => 'a@b.c']), $this->makeCallback([$listener, 'handle'], true));
+
+        self::assertSame(['user_id' => 1, 'email' => 'a@b.c'], $handler->handle());
+        self::assertSame(['event', ['user_id' => 1, 'email' => 'a@b.c']], $middleware->received);
+    }
+
+    public function testListenerClassIsInstantiatedForEveryMessage(): void
+    {
+        $callback = $this->makeCallback(StatefulListenerStub::class);
+
+        $first = $this->makeHandler($this->makeMessage(['n' => 1]), $callback)->handle();
+        $second = $this->makeHandler($this->makeMessage(['n' => 2]), $callback)->handle();
+
+        // State of the first message must not leak into the second one.
+        self::assertSame([1], $first);
+        self::assertSame([2], $second);
+    }
+
     private function makeCallback($listenerClass, $wildcard = false): callable
     {
         return (new Dispatcher())->makeListener($listenerClass, $wildcard);
@@ -303,3 +363,14 @@ class MiddlewareTest extends TestCase
     }
 }
 
+class StatefulListenerStub
+{
+    private array $seen = [];
+
+    public function handle(array $payload): array
+    {
+        $this->seen[] = $payload['n'];
+
+        return $this->seen;
+    }
+}
