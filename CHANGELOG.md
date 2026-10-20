@@ -22,17 +22,19 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Package name**: `rabbitevents/rabbitevents` (it `replace`s `nuwber/rabbitevents`). PHP namespaces are unchanged.
-- **Requirements**: PHP 8.2+, Laravel 11, 12 or 13.
+- **Requirements**: PHP 8.2+, Laravel 11, 12 or 13. `ext-bcmath` is no longer required.
+- `rabbitevents:listen` declares a `{queue}.failed` queue next to every listener queue, and failed messages accumulate there until retried, forgotten or flushed: monitor its size.
 - `publish()` and `Publishable::publish()` return the message ID (`?string`) instead of `void`. It is `null` for an `afterCommit` event published inside a transaction.
 - Published messages are persistent (`delivery_mode = 2`).
 - `Contracts\Connection` requires `makeFailedQueue(string $queueName): FailedDestination`. `Contracts\FailedDestination` marks a failed queue by type and knows its original queue; `Failer` accepts only a `FailedDestination`.
 - `Contracts\QueueConsumer` requires `requeue(array $messages)` (order-preserving return to the queue).
 - `Releaser` delays retries only through producers implementing `Contracts\DelaysDelivery` (`AmqpProducerAdapter` does); before, a producer without `setDeliveryDelay()` made every delayed retry fail.
 - `Contracts\TransportMessage` requires `setRoutingKey()`, `getMessageId()` and `setMessageId()`.
+- `Handler` and `HandlerFactory` take a `Listener\Support\Releaser` instead of any `Contracts\Transport`.
 - `JsonPayload` implements `\JsonSerializable`.
 
 ### Removed
-- `bin/` release and split scripts.
+- Laravel 10 support.
 
 ## [9.0.0]
 
