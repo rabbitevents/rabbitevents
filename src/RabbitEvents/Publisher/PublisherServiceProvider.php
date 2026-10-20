@@ -12,7 +12,7 @@ use RabbitEvents\Foundation\Context;
 
 class PublisherServiceProvider extends ServiceProvider
 {
-    public function boot(): void
+    public function register(): void
     {
         $this->app->singleton(
             Publisher::class,
@@ -21,10 +21,7 @@ class PublisherServiceProvider extends ServiceProvider
                 new Sender($app[Context::class]->makeTopic(), $app[Context::class]->createProducer())
             )
         );
-    }
 
-    public function register(): void
-    {
         if (!$this->app->runningInConsole()) {
             return;
         }

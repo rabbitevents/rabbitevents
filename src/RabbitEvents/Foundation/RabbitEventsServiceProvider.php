@@ -12,13 +12,11 @@ use RabbitEvents\Foundation\Serialization\JsonSerializer;
 
 class RabbitEventsServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any events for your application.
-     *
-     * @return void
-     */
-    public function boot(): void
+    public function register(): void
     {
+        // Defaults for keys missing from a config/rabbitevents.php published by an older version.
+        $this->mergeConfigFrom(__DIR__ . '/config/rabbitevents.php', 'rabbitevents');
+
         $this->app->singleton(Serialization\SerializerRegistry::class, function ($app) {
             $registry = new Serialization\SerializerRegistry();
             $registry->register(
@@ -45,10 +43,7 @@ class RabbitEventsServiceProvider extends ServiceProvider
                 $app[Serialization\SerializerRegistry::class]
             )
         );
-    }
 
-    public function register(): void
-    {
         $this->registerCommands();
         $this->registerPublishing();
     }
