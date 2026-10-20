@@ -71,15 +71,18 @@ class RetryCommand extends Command
     protected function retryMessages(?string $targetId): int
     {
         $producer = null;
+        $targetQueues = [];
         $retried = 0;
 
-        $this->eachFailedMessage(function (Message $message, Consumer $consumer, Context $context, FailedDestination $failedQueue) use ($targetId, &$producer, &$retried) {
+        $this->eachFailedMessage(function (Message $message, Consumer $consumer, Context $context, FailedDestination $failedQueue) use ($targetId, &$producer, &$targetQueues, &$retried) {
             $msgId = $message->id();
 
             if (is_null($targetId) || $msgId === $targetId) {
                 $producer ??= $context->createProducer();
-                $targetQueue = $this->getTargetQueue($context, $message, $failedQueue);
-                $this->republishMessage($message, $producer, $targetQueue);
+                // Declared once per queue, not once per message.
+                $queueName = $this->getTargetQueueName($message, $failedQueue);
+                $targetQueues[$queueName] ??= $context->makeQueue($queueName, [], $context->makeTopic());
+                $this->republishMessage($message, $producer, $targetQueues[$queueName]);
                 $consumer->acknowledge($message);
 
                 $retried++;
@@ -96,11 +99,9 @@ class RetryCommand extends Command
         return $retried;
     }
 
-    protected function getTargetQueue(Context $context, Message $message, FailedDestination $failedQueue): Destination
+    protected function getTargetQueueName(Message $message, FailedDestination $failedQueue): string
     {
-        $queueName = $message->getProperty('x-original-queue') ?: $failedQueue->getOriginalQueueName();
-
-        return $context->makeQueue($queueName, [], $context->makeTopic());
+        return $message->getProperty(Failer::ORIGINAL_QUEUE) ?: $failedQueue->getOriginalQueueName();
     }
 
     protected function republishMessage(Message $message, Producer $producer, Destination $destination): void

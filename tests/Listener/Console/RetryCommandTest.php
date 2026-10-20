@@ -64,6 +64,22 @@ class RetryCommandTest extends FailedQueueTestCase
         self::assertCount(0, $consumer->messages);
     }
 
+    public function test_retry_all_declares_each_original_queue_once(): void
+    {
+        $app = $this->createMockApplication();
+        [$context, $producer] = $this->createContext([
+            $this->createFailedTransportMessage('msg-1'),
+            $this->createFailedTransportMessage('msg-2'),
+        ]);
+        $app->instance(Context::class, $context);
+
+        $this->runCommand(new RetryCommand(), $app, ['--all' => true]);
+
+        self::assertCount(2, $producer->sent);
+        $declared = array_filter($context->connection->createdQueues, fn(array $queue) => empty($queue['is_failed']));
+        self::assertCount(1, $declared);
+    }
+
     public function test_retries_message_to_original_queue_recorded_by_failer(): void
     {
         $app = $this->createMockApplication();
@@ -142,5 +158,26 @@ class RetryCommandTest extends FailedQueueTestCase
 
         self::assertEquals(0, $result);
         self::assertCount(1, $producer->sent);
+    }
+
+    public function test_browsed_messages_go_back_to_the_queue_when_the_scan_fails(): void
+    {
+        $app = $this->createMockApplication();
+        $first = $this->createFailedTransportMessage('msg-1');
+        $second = $this->createFailedTransportMessage('msg-2');
+        [$context, $producer, $consumer] = $this->createContext([$first, $second]);
+        $producer->throwException(new \RuntimeException('Broker unavailable'));
+        $app->instance(Context::class, $context);
+
+        try {
+            $this->runCommand(new RetryCommand(), $app, ['--all' => true]);
+            self::fail('The send failure must be reported');
+        } catch (\RuntimeException $e) {
+            self::assertSame('Broker unavailable', $e->getMessage());
+        }
+
+        // msg-1 failed to be retried and msg-2 wasn't reached yet: both stay in the failed queue.
+        self::assertSame([$first, $second], $consumer->messages);
+        self::assertCount(0, $consumer->acknowledged);
     }
 }

@@ -7,6 +7,7 @@ namespace RabbitEvents\Listener;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher as EventsDispatcher;
 use RabbitEvents\Foundation\Consumer;
+use RabbitEvents\Foundation\Contracts\Transport;
 use RabbitEvents\Foundation\Exceptions\ConnectionLostException;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Events\MessageProcessingFailed;
@@ -24,7 +25,7 @@ class Worker
      */
     public bool $shouldQuit = false;
 
-    protected ?\RabbitEvents\Foundation\Contracts\Transport $failer = null;
+    protected ?Transport $failer = null;
 
     protected ?Releaser $releaser = null;
 
@@ -34,7 +35,7 @@ class Worker
     ) {
     }
 
-    public function setFailer(?\RabbitEvents\Foundation\Contracts\Transport $failer): self
+    public function setFailer(?Transport $failer): self
     {
         $this->failer = $failer;
 
@@ -157,9 +158,13 @@ class Worker
             $this->events->dispatch(new MessageProcessingFailed($message, $e));
 
             $message->markAsFailed($e);
-            $this->failMessage($message, $consumer);
 
-            $this->kill(WorkerExitStatus::ERROR);
+            try {
+                $this->failMessage($message, $consumer);
+            } finally {
+                // The worker is stuck: stop it even if the broker can't be reached to fail the message.
+                $this->kill(WorkerExitStatus::ERROR);
+            }
         });
 
         pcntl_alarm(max($options->timeout, 0));

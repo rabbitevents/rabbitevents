@@ -19,16 +19,25 @@ class Failer extends Sender
      */
     public const MAX_PROPERTY_LENGTH = 4096;
 
+    public const FAILED_AT = 'x-failed-at';
+    public const ORIGINAL_QUEUE = 'x-original-queue';
+    public const ORIGINAL_ROUTING_KEY = 'x-original-routing-key';
+    public const EXCEPTION_CLASS = 'x-exception-class';
+    public const EXCEPTION_MESSAGE = 'x-exception-message';
+    public const EXCEPTION_TRACE = 'x-exception-trace';
+    public const LISTENER = 'x-listener';
+
     /**
      * Properties describing the latest failure. They are cleared when the message is retried.
      */
     public const FAILURE_PROPERTIES = [
-        'x-failed-at',
-        'x-original-queue',
-        'x-exception-class',
-        'x-exception-message',
-        'x-exception-trace',
-        'x-listener',
+        self::FAILED_AT,
+        self::ORIGINAL_QUEUE,
+        self::ORIGINAL_ROUTING_KEY,
+        self::EXCEPTION_CLASS,
+        self::EXCEPTION_MESSAGE,
+        self::EXCEPTION_TRACE,
+        self::LISTENER,
     ];
 
     public function __construct(private readonly FailedDestination $failedQueue, Producer $producer)
@@ -60,20 +69,20 @@ class Failer extends Sender
             ));
         }
 
-        $originalRoutingKey = $message->getProperty('x-original-routing-key')
+        $originalRoutingKey = $message->getProperty(self::ORIGINAL_ROUTING_KEY)
             ?: $message->event
             ?: $message->getRoutingKey();
 
-        $message->setProperty('x-failed-at', time());
-        $message->setProperty('x-original-routing-key', $originalRoutingKey);
-        $message->setProperty('x-original-queue', $this->failedQueue->getOriginalQueueName());
-        $message->setProperty('x-exception-class', $exceptionClass);
-        $message->setProperty('x-exception-message', $exceptionMessage);
+        $message->setProperty(self::FAILED_AT, time());
+        $message->setProperty(self::ORIGINAL_ROUTING_KEY, $originalRoutingKey);
+        $message->setProperty(self::ORIGINAL_QUEUE, $this->failedQueue->getOriginalQueueName());
+        $message->setProperty(self::EXCEPTION_CLASS, $exceptionClass);
+        $message->setProperty(self::EXCEPTION_MESSAGE, $exceptionMessage);
         if ($exceptionTrace) {
-            $message->setProperty('x-exception-trace', $exceptionTrace);
+            $message->setProperty(self::EXCEPTION_TRACE, $exceptionTrace);
         }
         if ($failedListener = $message->failedListener()) {
-            $message->setProperty('x-listener', $failedListener);
+            $message->setProperty(self::LISTENER, $failedListener);
         }
 
         parent::send($message);
