@@ -159,15 +159,73 @@ class ListenCommandTest extends TestCase
         self::assertStringNotContainsString('No listeners registered', $bufferedOutput->fetch());
     }
 
-    private function createMockApplication(): Container
+    public function test_proceeds_for_an_event_a_wildcard_listener_receives_across_several_words(): void
+    {
+        $app = $this->createMockApplication();
+        $dispatcher = new Dispatcher($app);
+        // Dispatcher wildcards match like Str::is(): "order.*" receives "order.item.created".
+        $dispatcher->listen('order.*', static function () {});
+        $app->instance(Dispatcher::class, $dispatcher);
+
+        [$result, $output, $context] = $this->runListen($app, ['events' => 'order.item.created']);
+
+        self::assertSame(WorkerExitStatus::SUCCESS->value, $result);
+        self::assertStringNotContainsString('No listeners registered', $output);
+    }
+
+    public function test_falls_back_to_a_service_name_and_trims_events(): void
+    {
+        $app = $this->createMockApplication(['app.name' => null]);
+        $dispatcher = new Dispatcher($app);
+        $dispatcher->listen('user.created', static function () {});
+        $dispatcher->listen('user.updated', static function () {});
+        $app->instance(Dispatcher::class, $dispatcher);
+
+        [$result, , $context] = $this->runListen($app, ['events' => ' user.created , user.updated ']);
+
+        self::assertSame(WorkerExitStatus::SUCCESS->value, $result);
+        $context->shouldHaveReceived('makeQueue')->with('rabbitevents:user.created,user.updated', ['user.created', 'user.updated'], m::any());
+    }
+
+    /**
+     * @return array{int, string, Context&m\MockInterface}
+     */
+    private function runListen(Container $app, array $input): array
+    {
+        $command = new ListenCommand();
+        $command->setLaravel($app);
+        $arrayInput = new ArrayInput($input);
+        $bufferedOutput = new BufferedOutput();
+        $arrayInput->bind($command->getDefinition());
+        $command->setInput($arrayInput);
+        $command->setOutput(new OutputStyle($arrayInput, $bufferedOutput));
+
+        $destination = m::mock(Destination::class);
+        $context = m::spy(Context::class);
+        $context->shouldReceive('makeTopic')->andReturn($destination);
+        $context->shouldReceive('makeQueue')->andReturn($destination);
+        $context->shouldReceive('makeFailedQueue')->andReturnUsing(fn($queue) => new \RabbitEvents\Tests\Foundation\Stubs\FailedDestinationStub($queue));
+        $context->shouldReceive('createProducer')->andReturn(m::mock(Producer::class));
+        $context->shouldReceive('makeConsumer')->andReturn(m::mock(\RabbitEvents\Foundation\Consumer::class));
+
+        $worker = m::mock(Worker::class);
+        $worker->shouldReceive('setReleaser', 'setFailer');
+        $worker->shouldReceive('work')->andReturn(WorkerExitStatus::SUCCESS);
+
+        $result = $command->handle($context, $worker);
+
+        return [$result, $bufferedOutput->fetch(), $context];
+    }
+
+    private function createMockApplication(array $config = []): Container
     {
         $app = new Container();
         $app->bind(\RabbitEvents\Listener\Contracts\Deduplicator::class, \RabbitEvents\Listener\Deduplication\NullDeduplicator::class);
-        $configObj = new class([
+        $configObj = new class(array_merge([
             'app.name' => 'test-service',
             'rabbitevents.default' => 'rabbitmq',
             'rabbitevents.logging.enabled' => false,
-        ]) implements ArrayAccess {
+        ], $config)) implements ArrayAccess {
             /** @param array<string, mixed> $items */
             public function __construct(private array $items) {}
             public function offsetExists($offset): bool { return isset($this->items[$offset]); }

@@ -12,6 +12,11 @@ class ListenerServiceProvider extends BaseServiceProvider
     use HasListeners\RegisterListeners;
 
     /**
+     * The file rabbitevents:cache writes, relative to the bootstrap path.
+     */
+    public const CACHE_FILE = 'cache/rabbitevents.php';
+
+    /**
      * The event listener mappings for the application.
      *
      * @var array
@@ -54,23 +59,26 @@ class ListenerServiceProvider extends BaseServiceProvider
      */
     public function listens(): array
     {
-        if ($this->eventsAreCached()) {
-            $listeners = array_merge_recursive(
-                $this->listen,
-                require $this->app->bootstrapPath('cache/rabbitevents.php')
-            );
-        } else {
-            if ($this->shouldDiscoverEvents()) {
-                $this->listenerClasses = array_unique(array_merge(
-                    $this->listenerClasses,
-                    $this->discoverEvents()
-                ));
-            }
+        $attributeListeners = $this->eventsAreCached()
+            ? require $this->app->bootstrapPath(self::CACHE_FILE)
+            : $this->attributeListeners();
 
-            $listeners = array_merge_recursive($this->listen, $this->getEventsFromAttributes());
+        return $this->deduplicateListeners(array_merge_recursive($this->listen, $attributeListeners));
+    }
+
+    /**
+     * The listeners declared with #[Listener]: in the discovered classes (if discovery is enabled) and in
+     * $listenerClasses. This is what rabbitevents:cache caches.
+     *
+     * @return array<string, array<mixed>>
+     */
+    public function attributeListeners(): array
+    {
+        if ($this->shouldDiscoverEvents()) {
+            $this->listenerClasses = array_unique(array_merge($this->listenerClasses, $this->discoverEvents()));
         }
 
-        return $this->deduplicateListeners($listeners);
+        return $this->getEventsFromAttributes();
     }
 
     /**
@@ -81,7 +89,7 @@ class ListenerServiceProvider extends BaseServiceProvider
     protected function eventsAreCached(): bool
     {
         return $this->app->bound('path.bootstrap') &&
-            file_exists($this->app->bootstrapPath('cache/rabbitevents.php'));
+            file_exists($this->app->bootstrapPath(self::CACHE_FILE));
     }
 
     /**

@@ -28,6 +28,8 @@ use RabbitEvents\Listener\WorkerExitStatus;
  */
 class ListenCommand extends Command
 {
+    use ResolvesListenerQueue;
+
     /**
      * The name and signature of the console command.
      *
@@ -39,7 +41,7 @@ class ListenCommand extends Command
                             {--connection= : The name of the connection to listen on}
                             {--queue= : The queue to listen on}
                             {--memory=128 : The memory limit in megabytes}
-                            {--timeout=60 : The number of seconds a massage could be handled}
+                            {--timeout=60 : The number of seconds a message could be handled}
                             {--tries=1 : Number of times to attempt to handle a Message before logging it failed}
                             {--sleep=5 : Sleep time in seconds before handling failed message next time}';
 
@@ -138,30 +140,15 @@ class ListenCommand extends Command
     protected function gatherOptions(): ListenerOptions
     {
         return new ListenerOptions(
-            $this->option('service') ?: $this->laravel['config']->get("app.name"),
+            $this->resolveServiceName(),
             $this->option('connection') ?: $this->laravel['config']['rabbitevents.default'],
-            $this->gatherEvents(),
+            $this->resolveEvents($this->argument('events')),
             (int)$this->option('memory'),
             (int)$this->option('tries'),
             (int)$this->option('timeout'),
             (int)$this->option('sleep'),
             $this->option('queue') ?: null,
         );
-    }
-
-    private function gatherEvents(): array
-    {
-        $events = $this->argument('events');
-
-        if (is_null($events)) {
-            return $this->laravel[Dispatcher::class]->getEvents();
-        }
-
-        if (str_contains($events, ',')) {
-            return array_map('trim', explode(',', $events));
-        }
-
-        return [$events];
     }
 
     /**
@@ -195,7 +182,7 @@ class ListenCommand extends Command
     protected function registerLogWriters(): void
     {
         if (!$this->output->isQuiet()) {
-            $this->logWriters[] = new Log\Output($this->laravel, $this->output);
+            $this->logWriters[] = new Log\Output($this->output);
         }
 
         $config = $this->laravel['config'];
@@ -218,32 +205,16 @@ class ListenCommand extends Command
      */
     protected function hasListenerForEvent(string $event, array $registeredEvents): bool
     {
-        if (in_array($event, $registeredEvents, true)) {
+        // Whatever the dispatcher would deliver this event to, matched the way it matches wildcards.
+        if ($this->laravel[Dispatcher::class]->hasListeners($event)) {
             return true;
         }
 
+        // A wildcard event binds the queue to every matching routing key (AMQP: "*" is one word, "#" any).
+        $pattern = '/^' . str_replace(['\#', '\*'], ['.*', '[^.]+'], preg_quote($event, '/')) . '$/';
+
         foreach ($registeredEvents as $registeredEvent) {
-            if ($registeredEvent === '#' || $event === '#') {
-                return true;
-            }
-
-            // Check if registered wildcard matches the passed event
-            $regex = str_replace(
-                ['\#', '\*'],
-                ['.*', '[^.]+'],
-                preg_quote($registeredEvent, '/')
-            );
-            if (preg_match('/^' . $regex . '$/', $event)) {
-                return true;
-            }
-
-            // Check if passed wildcard matches the registered event
-            $regex = str_replace(
-                ['\#', '\*'],
-                ['.*', '[^.]+'],
-                preg_quote($event, '/')
-            );
-            if (preg_match('/^' . $regex . '$/', $registeredEvent)) {
+            if (preg_match($pattern, $registeredEvent)) {
                 return true;
             }
         }

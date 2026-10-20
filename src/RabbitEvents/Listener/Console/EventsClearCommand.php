@@ -6,6 +6,7 @@ namespace RabbitEvents\Listener\Console;
 
 use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
+use RabbitEvents\Listener\ListenerServiceProvider;
 
 class EventsClearCommand extends Command
 {
@@ -31,7 +32,7 @@ class EventsClearCommand extends Command
      */
     public function handle(Filesystem $files): int
     {
-        $files->delete($this->laravel->bootstrapPath('cache/rabbitevents.php'));
+        $files->delete($this->laravel->bootstrapPath(ListenerServiceProvider::CACHE_FILE));
 
         $this->info('RabbitEvents listeners cache cleared successfully.');
 

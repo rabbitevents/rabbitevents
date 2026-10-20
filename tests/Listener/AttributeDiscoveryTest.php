@@ -14,9 +14,6 @@ class AttributeDiscoveryTest extends TestCase
     {
         $app = $this->mockApplication();
 
-        if (!is_dir(__DIR__ . '/Fixtures/Listeners')) {
-            mkdir(__DIR__ . '/Fixtures/Listeners', 0777, true);
-        }
 
         $provider = new TestServiceProvider($app);
         $provider->registerListeners();
@@ -33,13 +30,30 @@ class AttributeDiscoveryTest extends TestCase
         $this->assertEquals(['ManualListener'], $events['manual.event']);
     }
 
+    public function testCacheKeepsListenerClassesDeclaredOnTheProvider()
+    {
+        $provider = new TestServiceProvider($this->mockApplication());
+        $provider->registerListeners();
+        $cache = tempnam(sys_get_temp_dir(), 'rabbitevents');
+        file_put_contents($cache, '<?php return ' . var_export($provider->attributeListeners(), true) . ';');
+
+        $app = $this->mockApplication(['path.bootstrap' => true]);
+        $app->shouldReceive('bootstrapPath')->with(\RabbitEvents\Listener\ListenerServiceProvider::CACHE_FILE)->andReturn($cache);
+
+        try {
+            $events = (new TestServiceProvider($app))->listens();
+        } finally {
+            unlink($cache);
+        }
+
+        $this->assertEquals([[TestListener::class, 'handle'], [TestListener::class, 'onOtherEvent']], $events['my.event']);
+        $this->assertEquals(['ManualListener'], $events['manual.event']);
+    }
+
     public function testDeduplicateListenersWithClassConstant()
     {
         $app = $this->mockApplication();
 
-        if (!is_dir(__DIR__ . '/Fixtures/Listeners')) {
-            mkdir(__DIR__ . '/Fixtures/Listeners', 0777, true);
-        }
 
         // Register the same listener both manually (with ::class) and via attribute
         $provider = new TestDuplicateServiceProvider($app);
