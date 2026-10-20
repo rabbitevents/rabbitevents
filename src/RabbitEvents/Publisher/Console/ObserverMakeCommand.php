@@ -45,7 +45,21 @@ class ObserverMakeCommand extends GeneratorCommand
      */
     protected function buildClass($name)
     {
-        return $this->replaceModel(parent::buildClass($name), (string) $this->option('model'));
+        return $this->replaceModel(parent::buildClass($name), (string) $this->option('model') ?: $this->guessModel($name));
+    }
+
+    /**
+     * "UserObserver" observes "User".
+     */
+    protected function guessModel(string $name): string
+    {
+        $class = class_basename($name);
+
+        if (!str_ends_with($class, 'Observer') || $class === 'Observer') {
+            throw new \InvalidArgumentException("Can't guess the model of [{$class}]: pass it with --model.");
+        }
+
+        return Str::beforeLast($class, 'Observer');
     }
 
     /**
