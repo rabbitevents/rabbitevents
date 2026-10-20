@@ -62,6 +62,19 @@ class QueueFactoryTest extends TestCase
         (new QueueFactory($amqpContext, $this->connection(durable: true)))->makeAndDeclare('rabbitevents-app:item.created');
     }
 
+    public function test_explains_406_reported_by_ext_amqp(): void
+    {
+        require_once __DIR__ . '/../Stubs/ext-amqp-exceptions.php';
+
+        $amqpContext = m::mock(AmqpContext::class);
+        $amqpContext->shouldReceive('createQueue')->andReturn(new AmqpQueue('q'));
+        $amqpContext->shouldReceive('declareQueue')->andThrow(new \AMQPQueueException('Server channel error: 406, message: PRECONDITION_FAILED', 406));
+
+        $this->expectException(QueueArgumentsMismatchException::class);
+
+        (new QueueFactory($amqpContext, $this->connection(durable: true)))->makeAndDeclare('q');
+    }
+
     public function test_rethrows_other_channel_errors(): void
     {
         $amqpContext = m::mock(AmqpContext::class);
