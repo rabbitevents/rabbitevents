@@ -63,14 +63,26 @@ class RabbitEventsServiceProvider extends ListenerServiceProvider
         'payment.succeeded' => [
             'App\Listeners\SendNotification',
             'App\Listeners\ChangeUserRole@process',
-            function($payload) { Log::info('Payment Succeeded', $payload); },
-            ['App\Listeners\ChangeUserRole', 'process']
+            ['App\Listeners\ChangeUserRole', 'process'],
         ],
         'item.*' => [
-            AllItemEventsListener::class
-        ]
+            AllItemEventsListener::class,
+        ],
     ];
 }
+```
+
+A closure can't be a property default in PHP; register closure listeners with the `RabbitEvents` facade, e.g. in the `boot()` method of a service provider:
+
+```php
+<?php
+
+use Illuminate\Support\Facades\Log;
+use RabbitEvents\Listener\Facades\RabbitEvents;
+
+RabbitEvents::listen('payment.succeeded', function (array $payload) {
+    Log::info('Payment Succeeded', $payload);
+});
 ```
 
 ### Registering Listeners via Attributes<a name="registering-listeners-via-attributes"></a>
@@ -166,11 +178,11 @@ class AllItemEventsListener
 {
     public function handle($event, $payload)
     {
-        match($event) => [
-            'item.created' => ...,
-            'item.deleted' => ...,
-            'item.updated' => ...,
-        ];
+        match ($event) {
+            'item.created' => $this->created($payload),
+            'item.deleted' => $this->deleted($payload),
+            default => null,
+        };
     }
 }
 ```
@@ -231,16 +243,14 @@ namespace App\Listeners\RabbitEvents\Middleware;
 
 class FilterEntities
 {
-    /** 
-     * @param string $event the event name. Passing only for wildcard events
-     * @param array $payload
-     */
-    public function handle([$event,] $payload)
+    public function handle(array $payload): bool
     {
-        return !\Arr::get($payload, 'entity.type') == 'mytype';
+        return \Arr::get($payload, 'entity.type') === 'mytype';
     }
 }
 ```
+
+Middleware get the same arguments as the listener they wrap: for a wildcard listener, the event name comes first (`handle(string $event, array $payload)`).
 
 In this example, you see that if you need to stop the propagation, just return `false`.
 
@@ -255,16 +265,12 @@ class PaymentListener
 {
     public array $middleware = [
         FilterEntities::class,
-        `App\Listeners\RabbitEvents\Middleware\AnotherMiddleware@someAction`,
+        'App\Listeners\RabbitEvents\Middleware\AnotherMiddleware@someAction',
     ];      
 
-    /** 
-     * @param string $event the Event Name. Passing only for wildcard events
-     * @param array $payload
-     */
-    public function middleware([$event, ]$payload)
+    public function middleware(array $payload): bool
     {
-        return !\Arr::get($payload, 'entity.type') == 'mytype';  
+        return \Arr::get($payload, 'entity.type') === 'mytype';
     }
 }
 ```

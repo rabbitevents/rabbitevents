@@ -20,6 +20,6 @@ class Listener
      */
     public function handle(array $payload): void
     {
-        SomeModel::create(Arr::only(['item1', 'item2', 'item3']));
+        SomeModel::create(Arr::only($payload, ['item1', 'item2', 'item3']));
     }
 }

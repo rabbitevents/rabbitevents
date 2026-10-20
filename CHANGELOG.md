@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [10.0.1]
+
+### Fixed
+- `JsonSerializer` accepted scalars, `null` and `\stdClass` but `JsonPayload` rejected them with a `TypeError`, both when publishing and when receiving such JSON.
+- Methods of one subscriber listening to the same event were tracked as one listener in `x-succeeded-listeners`: after the first method succeeded, the second was skipped, even on the first delivery. They are now tracked as `Class@method`.
+- Listener discovery failed in applications without an `app/Listeners` directory (the Laravel 11+ default).
+- A closure or `[$object, 'method']` in `$listen` made the service provider fail.
+- A listener class was registered in the container as an instance for the lifetime of the worker, so its state leaked from one message to the next. Now every message gets a new instance, shared by the listener's middleware and its handler.
+- Onion-style middleware (with `$next`) got the payload wrapped into an extra array, and filter middleware of wildcard listeners got an associative payload spread into separate arguments. Middleware now get the same arguments as their listener.
+- `assertPublished('mail')` and other event names that are PHP function names called that function. `assertNotPublished()` accepts the same arguments as `assertPublished()`.
+- Enums and objects that `json_encode()` can't encode in Laravel `Context` broke publishing.
+- `QueueArgumentsMismatchException` also explains a 406 reported by ext-amqp (`enqueue/amqp-ext`).
+- The failed-queue commands return browsed messages to the queue even when they fail midway; `--events` values are trimmed.
+- A worker that timed out was not stopped if failing the message threw.
+- `rabbitevents:listen` failed without `app.name`, and aborted for an event that a wildcard listener receives across several words (`order.*` for `order.item.created`).
+- `rabbitevents:cache` ignored `shouldDiscoverEvents()`, and listeners from `$listenerClasses` were lost when loading the cache.
+- `rabbitevents:make:observer` without `--model` generated invalid PHP; the model is now guessed from the name (`UserObserver` → `User`).
+- `rabbitevents:retry` keeps `x-original-routing-key` no longer, and `retry --all` declares each original queue once instead of once per message.
+- `HandlerFactory` accepts any callable, as declared, and doesn't try to build function names as classes.
+- Container bindings moved to `register()`, and the config is merged with the package defaults, so keys added in 10.x get their default values in configs published by older versions.
+- `rabbitevents/publisher` requires `illuminate/log` (its `Context` facade); `rabbitevents/foundation` doesn't.
+- Examples and README snippets that didn't work.
+
+### Changed behaviour
+- Listener instances are no longer shared between messages. Bind a listener as a singleton yourself if it must keep state.
+- Filter middleware of a wildcard listener receive an associative payload as one argument, like the listener does.
+
 ## [10.0.0]
 
 10.x interoperates with 9.x on the wire: services can be upgraded one by one, and 9.x and 10.x workers can share queues. No queue migration is needed.

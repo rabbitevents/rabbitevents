@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace app\RabbitEvents;
+namespace App\RabbitEvents;
 
 use RabbitEvents\Publisher\Support\AbstractPublishableEvent;
 

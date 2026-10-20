@@ -394,10 +394,10 @@ use RabbitEvents\Foundation\Contracts\TransportMessage;
 
 class MySerializer implements Serializer
 {
-    public function serialize(mixed $payload): Payload { ... }
-    public function deserialize(TransportMessage $message): Payload { ... }
+    public function serialize(mixed $payload): Payload { /* ... */ }
+    public function deserialize(TransportMessage $message): Payload { /* ... */ }
     public function contentType(): ContentType { return new MyContentType(); }
-    public function canSerialize(mixed $payload): bool { ... }
+    public function canSerialize(mixed $payload): bool { /* ... */ }
 }
 ```
 
