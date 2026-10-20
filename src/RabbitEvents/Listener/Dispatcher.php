@@ -103,43 +103,60 @@ class Dispatcher extends BaseDispatcher
      */
     public function makeListener($listener, $wildcard = false): Closure
     {
+        // A closure is called as Handler calls it, with ($event, $payload), as in every released version.
         if ($listener instanceof Closure) {
             return $listener;
         }
 
         return function ($event, $payload) use ($listener, $wildcard) {
             $listener = $this->instantiateListener($listener);
-            $throughMiddleware = $this->extractMiddleware($listener);
+            $arguments = static::listenerArguments($payload);
+            $call = function (array $passed) use ($listener, $wildcard, $event, $payload, $arguments) {
+                if (!$wildcard) {
+                    return parent::makeListener($listener)($event, $passed);
+                }
 
-            if (!$wildcard) {
-                $payload = static::listenerArguments($payload);
+                // A wildcard listener gets ($event, $payload) like in Laravel and 9.x; if an onion middleware
+                // passed something else to $next, it gets that.
+                $passedPayload = $passed === $arguments ? $payload : static::payloadFromArguments($passed);
+
+                return parent::makeListener($listener, true)($event, $passedPayload);
+            };
+
+            if (empty($throughMiddleware = $this->extractMiddleware($listener))) {
+                return $call($arguments);
             }
-
-            if (empty($throughMiddleware)) {
-                return parent::makeListener($listener, $wildcard)($event, $payload);
-            }
-
-            $pipes = array_map(
-                fn ($middleware) => $this->wrapMiddlewareIntoPipelineStage($middleware, $event, $wildcard),
-                $throughMiddleware
-            );
 
             return (new Pipeline($this->container))
-                ->send($payload)
-                ->through($pipes)
-                ->then(function ($payload) use ($listener, $wildcard, $event) {
-                    return parent::makeListener($listener, $wildcard)($event, $payload);
-                });
+                ->send($arguments)
+                ->through(array_map(
+                    fn ($middleware) => $this->wrapMiddlewareIntoPipelineStage($middleware, $event, $wildcard),
+                    $throughMiddleware
+                ))
+                ->then($call);
         };
     }
 
     /**
-     * A list payload is the list of the listener's arguments; any other payload (an associative array,
-     * a scalar) is the only argument.
+     * A non-empty list payload is the list of the listener's arguments (publish() wraps a payload into one);
+     * any other payload (an associative or empty array, a scalar, null, an object) is the only argument.
      */
     protected static function listenerArguments(mixed $payload): array
     {
-        return !is_array($payload) || Arr::isAssoc($payload) ? [$payload] : $payload;
+        return static::isArgumentList($payload) ? $payload : [$payload];
+    }
+
+    /**
+     * The payload of the listener arguments an onion middleware passed to $next.
+     */
+    protected static function payloadFromArguments(array $arguments): mixed
+    {
+        return count($arguments) === 1 && !static::isArgumentList($arguments[0]) ? $arguments[0] : $arguments;
+    }
+
+    private static function isArgumentList(mixed $payload): bool
+    {
+        return is_array($payload) && $payload !== [] && !Arr::isAssoc($payload);
     }
 
     protected static array $middlewareExpectsNextCache = [];
@@ -153,18 +170,16 @@ class Dispatcher extends BaseDispatcher
     {
         $expectsNext = $this->middlewareExpectsNext($middleware);
 
-        // Middleware get the same arguments as the listener, after $event for wildcard events.
-        // For a regular event $passable already is the list of the listener's arguments.
-        return function ($passable, $next) use ($middleware, $event, $wildcard, $expectsNext) {
+        // $passable is the list of the listener arguments. Every middleware gets them, after $event for a
+        // wildcard listener; an onion middleware gets $next last and passes the arguments on to it.
+        return function (array $passable, $next) use ($middleware, $event, $wildcard, $expectsNext) {
+            $arguments = $wildcard ? [$event, ...$passable] : $passable;
+
             if ($expectsNext) {
-                return $wildcard
-                    ? ($middleware)($event, $passable, $next)
-                    : ($middleware)(...[...$passable, static fn(...$arguments) => $next($arguments)]);
+                return ($middleware)(...[...$arguments, static fn(...$passed) => $next($passed)]);
             }
 
-            $result = $wildcard
-                ? ($middleware)($event, ...static::listenerArguments($passable))
-                : ($middleware)(...$passable);
+            $result = ($middleware)(...$arguments);
 
             if (false === $result) {
                 return null;

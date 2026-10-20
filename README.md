@@ -299,8 +299,8 @@ $messageId = publish('payment.processed', ['amount' => 99.00]);
 
 Listener worker console logs display the message ID and execution time in real-time:
 ```text
-[3fa85f64-5717-4562-b3fc-2c963f66afa6] Processing: payment.processed - App\Listeners\HandlePayment
-[3fa85f64-5717-4562-b3fc-2c963f66afa6] Processed:  payment.processed - App\Listeners\HandlePayment (14.22ms)
+[3fa85f64-5717-4562-b3fc-2c963f66afa6] [2026-10-20 12:00:00] Processing: payment.processed:App\Listeners\HandlePayment@handle
+[3fa85f64-5717-4562-b3fc-2c963f66afa6] [2026-10-20 12:00:00] Processed:  payment.processed:App\Listeners\HandlePayment@handle (14.22ms)
 ```
 
 ### Failed Messages<a name="failed-messages"></a>

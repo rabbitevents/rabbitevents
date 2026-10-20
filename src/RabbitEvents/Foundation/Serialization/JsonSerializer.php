@@ -36,9 +36,10 @@ class JsonSerializer implements Serializer
 
     public function canSerialize(mixed $payload): bool
     {
-        return is_array($payload) || 
-            is_scalar($payload) || 
-            $payload instanceof \JsonSerializable || 
-            $payload instanceof \stdClass;
+        return is_array($payload)
+            || is_scalar($payload)
+            || is_null($payload)
+            || $payload instanceof \JsonSerializable
+            || $payload instanceof \stdClass;
     }
 }

@@ -350,7 +350,7 @@ class ProcessorTest extends TestCase
         );
         $failer->send($message);
 
-        self::assertSame(SecondFailingRealListener::class, $message->getProperty('x-listener'));
+        self::assertSame(SecondFailingRealListener::class . '@handle', $message->getProperty('x-listener'));
         self::assertSame('Second listener boom', $message->getProperty('x-exception-message'));
         self::assertSame('order.created', $message->getProperty('x-original-routing-key'));
     }

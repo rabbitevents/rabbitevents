@@ -91,12 +91,6 @@ class ObserverMakeCommand extends GeneratorCommand
             $stub = str_replace('NamespacedDummyModel', $namespaceModel, $stub);
         }
 
-        $stub = str_replace(
-            "use {$namespaceModel};\nuse {$namespaceModel};",
-            "use {$namespaceModel};",
-            $stub
-        );
-
         $model = class_basename(trim($model, '\\'));
 
         $stub = str_replace('DocDummyModel', Str::snake($model, ' '), $stub);

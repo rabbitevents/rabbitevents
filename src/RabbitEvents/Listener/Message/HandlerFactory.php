@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Message;
 
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Support\Str;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Support\Releaser;
 
@@ -16,37 +17,40 @@ class HandlerFactory
     ) {
     }
 
-    public function make(Message $message, callable $callback, string $listenerClass): Handler
+    /**
+     * @param string $listener The listener as Class@method (or \Closure::class), used in logs and x-listener
+     */
+    public function make(Message $message, callable $callback, string $listener): Handler
     {
-        $failedCallback = null;
-
-        if ($this->hasFailedMethod($listenerClass)) {
-            $failedCallback = [$this->container->make($listenerClass), 'failed'];
-        }
-
         return new Handler(
             $message,
             \Closure::fromCallable($callback),
-            $listenerClass,
+            $listener,
             $this->releaser,
-            $failedCallback
+            $this->failedCallback(Str::before($listener, '@'))
         );
     }
 
     /**
-     * Only a listener class (or a container binding of one) can have failed(); don't build anything else.
+     * The listener's failed() method, if it has one. Its instance is built only when a message fails.
      */
-    private function hasFailedMethod(string $listenerClass): bool
+    private function failedCallback(string $class): ?\Closure
     {
-        if ($listenerClass === \Closure::class) {
-            return false;
+        if ($class === \Closure::class) {
+            return null;
         }
 
-        if (class_exists($listenerClass)) {
-            return method_exists($listenerClass, 'failed');
+        if (class_exists($class)) {
+            return method_exists($class, 'failed')
+                ? fn(...$arguments) => $this->container->make($class)->failed(...$arguments)
+                : null;
         }
 
-        return $this->container->bound($listenerClass)
-            && method_exists($this->container->make($listenerClass), 'failed');
+        // A container binding: it can only be checked by building it, so build it once.
+        if ($this->container->bound($class) && method_exists($listener = $this->container->make($class), 'failed')) {
+            return $listener->failed(...);
+        }
+
+        return null;
     }
 }

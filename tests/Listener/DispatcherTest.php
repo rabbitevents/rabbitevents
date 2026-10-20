@@ -37,28 +37,20 @@ class DispatcherTest extends TestCase
         self::assertTrue($dispatcher->hasListeners('item.event'));
     }
 
-    public function testAddedClosureListeners(): void
+    public function testClosureListenersGetTheEventAndThePayload(): void
     {
         $dispatcher = new Dispatcher();
-        $closure1 = static function() {};
-        $closure2 = static function() {};
+        $received = [];
+        $dispatcher->listen('item.event', function (string $event, array $payload) use (&$received) {
+            $received[] = [$event, $payload];
+        });
 
-        $dispatcher->listen('item.event', $closure1);
-        $dispatcher->listen('item.event', $closure2);
-
-        $listeners = $dispatcher->getListeners('item.event');
-
-        self::assertCount(2, $listeners);
-
-        foreach ($listeners as $key => $listener) {
-            $class = 'Closure';
-            $callback = $listener;
-            ++$key;
-
-            self::assertEquals('Closure', $class);
-            $varName = "closure$key";
-            self::assertSame($$varName, $callback);
+        // Handler calls every listener with (event, payload); closures get both, as in every released version.
+        foreach ($dispatcher->getListeners('item.event') as $listener) {
+            $listener('item.event', ['a' => 1]);
         }
+
+        self::assertSame([['item.event', ['a' => 1]]], $received);
     }
 
     public function testSimpleListenerCallWithAssocArrayAsPayload(): void
