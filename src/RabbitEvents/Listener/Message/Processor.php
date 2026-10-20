@@ -54,7 +54,7 @@ class Processor
                 }
 
                 $response = $this->runHandler(
-                    $this->handlerFactory->make($message, $listener, $this->getListenerClass($listener)),
+                    $this->handlerFactory->make($message, $listener, $listenerId ?? \Closure::class),
                     $options
                 );
 
@@ -98,11 +98,6 @@ class Processor
                 Context::addHidden($previousHidden);
             }
         }
-    }
-
-    protected function getListenerClass(mixed $listener): string
-    {
-        return $this->getListenerCallback($listener)[0];
     }
 
     /**

@@ -50,7 +50,7 @@ Details about the configuration are described in the library [documentation](htt
 
 The `listen` property of `RabbitEventsServiceProvider` contains an array of all events (keys) and their listeners (values). You can add as many events to this array as your application requires.
 
-You can even register listeners using the `*` as a wildcard parameter, allowing you to catch multiple events with the same listener. Wildcard listeners receive the event name as their first argument and the entire event data array as their second argument.
+You can even register listeners using the `*` as a wildcard parameter, allowing you to catch multiple events with the same listener. Wildcard listeners receive the event name as their first argument and the entire event data array as their second argument (an event published with the `publish()` helper arrives wrapped into a list: `[$payload]`). Closure listeners are called the same way, with the event name first.
 
 ```php
 <?php
@@ -80,7 +80,8 @@ A closure can't be a property default in PHP; register closure listeners with th
 use Illuminate\Support\Facades\Log;
 use RabbitEvents\Listener\Facades\RabbitEvents;
 
-RabbitEvents::listen('payment.succeeded', function (array $payload) {
+// A closure gets the event name first, then the payload.
+RabbitEvents::listen('payment.succeeded', function (string $event, array $payload) {
     Log::info('Payment Succeeded', $payload);
 });
 ```
@@ -250,7 +251,7 @@ class FilterEntities
 }
 ```
 
-Middleware get the same arguments as the listener they wrap: for a wildcard listener, the event name comes first (`handle(string $event, array $payload)`).
+A middleware gets the payload the way a regular listener gets it, after the event name for a wildcard listener (`handle(string $event, array $payload)`).
 
 In this example, you see that if you need to stop the propagation, just return `false`.
 
@@ -279,7 +280,7 @@ You can see that you are also able to specify which method of the attached middl
 
 ### Pipeline Middleware (Onion-style)
 
-In addition to filter middleware, RabbitEvents supports Laravel's onion-style pipeline middleware accepting a `$next` closure:
+In addition to filter middleware, RabbitEvents supports Laravel's onion-style pipeline middleware accepting a `$next` closure as the last argument. `$next` takes the payload (without the event name of a wildcard listener):
 
 ```php
 <?php
@@ -437,8 +438,8 @@ The Supervisor configuration is similar to [Laravel Queue](https://laravel.com/d
 The package provides 2 ways to see what happens to your listener:
 1. **Console Output**: Outputs color-coded logs including the unique Message ID and execution duration (in milliseconds):
    ```
-   [9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d] Processing: app:payment.succeeded - App\Listeners\SendNotification
-   [9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d] Processed:  app:payment.succeeded - App\Listeners\SendNotification (12.45ms)
+   [9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d] [2026-10-20 12:00:00] Processing: payment.succeeded:App\Listeners\SendNotification@handle
+   [9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d] [2026-10-20 12:00:00] Processed:  payment.succeeded:App\Listeners\SendNotification@handle (12.45ms)
    ```
    To get exception stack traces, run with verbosity >= 1 (`-v`). To suppress output, use `--quiet`.
 

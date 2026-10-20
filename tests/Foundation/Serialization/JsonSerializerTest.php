@@ -51,6 +51,7 @@ class JsonSerializerTest extends TestCase
             'int' => [42, '42'],
             'bool' => [true, 'true'],
             'stdClass' => [(object) ['a' => 1], '{"a":1}'],
+            'null' => [null, 'null'],
         ];
     }
 

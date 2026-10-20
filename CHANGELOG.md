@@ -5,12 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [10.0.1]
 
 ### Fixed
-- `JsonSerializer` accepted scalars, `null` and `\stdClass` but `JsonPayload` rejected them with a `TypeError`, both when publishing and when receiving such JSON.
-- Methods of one subscriber listening to the same event were tracked as one listener in `x-succeeded-listeners`: after the first method succeeded, the second was skipped, even on the first delivery. They are now tracked as `Class@method`.
+- `JsonSerializer` accepted scalars and `\stdClass` but `JsonPayload` rejected them with a `TypeError`, both when publishing and when receiving such JSON; `null` is accepted too.
+- A listener of an event without data (`publish('user.registered')`, an empty array, JSON `null`) was called without arguments, so `handle(array $payload)` failed with `ArgumentCountError`; it now gets the empty payload.
+- Methods of one subscriber listening to the same event were tracked as one listener in `x-succeeded-listeners`: after the first method succeeded, the second was skipped, even on the first delivery. They are now tracked as `Class@method`, which also names the listener in logs and in `x-listener`.
+- The listener instance for `failed()` was built for every message; it is now built only when a message fails.
 - Listener discovery failed in applications without an `app/Listeners` directory (the Laravel 11+ default).
-- A closure or `[$object, 'method']` in `$listen` made the service provider fail.
+- A closure or `[$object, 'method']` listener definition (e.g. returned by an overridden `listens()`) made the service provider fail.
 - A listener class was registered in the container as an instance for the lifetime of the worker, so its state leaked from one message to the next. Now every message gets a new instance, shared by the listener's middleware and its handler.
-- Onion-style middleware (with `$next`) got the payload wrapped into an extra array, and filter middleware of wildcard listeners got an associative payload spread into separate arguments. Middleware now get the same arguments as their listener.
+- Onion-style middleware (with `$next`) got the payload wrapped into an extra array, and filter middleware of wildcard listeners got an associative payload spread into separate arguments. Every middleware now gets the payload the way a regular listener gets it (after the event name for a wildcard listener); a wildcard listener still gets `($event, $payload)`.
 - `assertPublished('mail')` and other event names that are PHP function names called that function. `assertNotPublished()` accepts the same arguments as `assertPublished()`.
 - Enums and objects that `json_encode()` can't encode in Laravel `Context` broke publishing.
 - `QueueArgumentsMismatchException` also explains a 406 reported by ext-amqp (`enqueue/amqp-ext`).
@@ -23,11 +25,11 @@ All notable changes to this project will be documented in this file.
 - `HandlerFactory` accepts any callable, as declared, and doesn't try to build function names as classes.
 - Container bindings moved to `register()`, and the config is merged with the package defaults, so keys added in 10.x get their default values in configs published by older versions.
 - `rabbitevents/publisher` requires `illuminate/log` (its `Context` facade); `rabbitevents/foundation` doesn't.
-- Examples and README snippets that didn't work.
+- Examples and README snippets that didn't work, including the closure listener example: closures get `($event, $payload)`, as in every released version.
 
 ### Changed behaviour
 - Listener instances are no longer shared between messages. Bind a listener as a singleton yourself if it must keep state.
-- Filter middleware of a wildcard listener receive an associative payload as one argument, like the listener does.
+- Filter middleware of a wildcard listener receive an associative payload as one argument, as a regular listener does.
 
 ## [10.0.0]
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Message;
 
 
-use Illuminate\Support\Arr;
 use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Foundation\Message;
 use Throwable;
@@ -37,7 +36,10 @@ class Handler
 
     public function handle()
     {
-        return ($this->listener)($this->message->event, Arr::wrap($this->payload()));
+        $payload = $this->payload();
+
+        // Like Arr::wrap(), but null stays a value: Arr::wrap(null) is [], which would call the listener without it.
+        return ($this->listener)($this->message->event, is_array($payload) ? $payload : [$payload]);
     }
 
     public function payload(): mixed
