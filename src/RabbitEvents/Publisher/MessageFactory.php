@@ -46,37 +46,34 @@ class MessageFactory
 
     protected function sanitizeContextData(array $contextData): array
     {
-        return array_map(function ($value) {
-            if (is_scalar($value) || is_null($value)) {
-                return $value;
-            }
+        return array_map(fn($value) => $this->sanitizeContextValue($value), $contextData);
+    }
 
-            if (is_array($value)) {
-                return $this->sanitizeContextData($value);
-            }
+    /**
+     * AMQP tables accept only scalars, null and arrays: convert everything else, never fail.
+     */
+    protected function sanitizeContextValue(mixed $value): mixed
+    {
+        return match (true) {
+            is_scalar($value), is_null($value) => $value,
+            is_array($value) => $this->sanitizeContextData($value),
+            $value instanceof \BackedEnum => $value->value,
+            $value instanceof \UnitEnum => $value->name,
+            $value instanceof \Illuminate\Contracts\Queue\QueueableEntity => get_class($value) . ':' . $value->getQueueableId(),
+            $value instanceof \JsonSerializable => $this->sanitizeContextValue($value->jsonSerialize()),
+            is_object($value) && method_exists($value, 'toArray') => $this->sanitizeContextValue($value->toArray()),
+            $value instanceof \Stringable => (string) $value,
+            is_object($value) => $this->objectToArray($value),
+            default => get_debug_type($value),
+        };
+    }
 
-            if ($value instanceof \Illuminate\Contracts\Queue\QueueableEntity) {
-                return get_class($value) . ':' . $value->getQueueableId();
-            }
-
-            if ($value instanceof \JsonSerializable) {
-                $serialized = $value->jsonSerialize();
-                return is_array($serialized) ? $this->sanitizeContextData($serialized) : (string) $serialized;
-            }
-
-            if (is_object($value)) {
-                if (method_exists($value, 'toArray')) {
-                    return $this->sanitizeContextData($value->toArray());
-                }
-
-                if (method_exists($value, '__toString')) {
-                    return (string) $value;
-                }
-
-                return json_decode(json_encode($value), true) ?? get_class($value);
-            }
-
-            return (string) $value;
-        }, $contextData);
+    private function objectToArray(object $value): mixed
+    {
+        try {
+            return $this->sanitizeContextValue(json_decode(json_encode($value, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR));
+        } catch (\JsonException) {
+            return get_class($value);
+        }
     }
 }

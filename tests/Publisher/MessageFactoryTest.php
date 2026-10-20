@@ -91,6 +91,15 @@ class MessageFactoryTest extends TestCase
                 'stringable' => new class {
                     public function __toString(): string { return 'str-obj'; }
                 },
+                'unit_enum' => SanitizeTestUnitEnum::Draft,
+                'backed_enum' => SanitizeTestBackedEnum::Paid,
+                'invalid_utf8' => (object) ['name' => "\xB1\x31"],
+                'json_obj_returning_bool' => new class implements \JsonSerializable {
+                    public function jsonSerialize(): mixed { return false; }
+                },
+                'json_obj_returning_object' => new class implements \JsonSerializable {
+                    public function jsonSerialize(): mixed { return (object) ['nested' => 1]; }
+                },
                 'model' => new class implements \Illuminate\Contracts\Queue\QueueableEntity, \JsonSerializable {
                     public function getQueueableId(): mixed { return 42; }
                     public function getQueueableRelations(): array { return []; }
@@ -111,6 +120,11 @@ class MessageFactoryTest extends TestCase
                 'obj' => ['foo' => 'bar'],
                 'json_obj' => ['serialized' => 123],
                 'stringable' => 'str-obj',
+                'unit_enum' => 'Draft',
+                'backed_enum' => 'paid',
+                'invalid_utf8' => 'stdClass',
+                'json_obj_returning_bool' => false,
+                'json_obj_returning_object' => ['nested' => 1],
             ], array_diff_key($traceContext, ['model' => true]));
             self::assertStringEndsWith(':42', $traceContext['model']);
             self::assertStringNotContainsString('do-not-leak', json_encode($traceContext));
@@ -138,4 +152,14 @@ class Event extends AbstractPublishableEvent
     {
         return $this->toPublish;
     }
+}
+
+enum SanitizeTestUnitEnum
+{
+    case Draft;
+}
+
+enum SanitizeTestBackedEnum: string
+{
+    case Paid = 'paid';
 }
