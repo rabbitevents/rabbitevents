@@ -39,11 +39,6 @@ class SerializerRegistry
     }
 
     /**
-     * @param string $contentType
-     * @return Serializer
-     * @throws UnsupportedContentTypeException
-     */
-    /**
      * @param string|ContentType $contentType
      * @return Serializer
      * @throws UnsupportedContentTypeException
