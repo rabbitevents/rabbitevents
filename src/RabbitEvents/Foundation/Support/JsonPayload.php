@@ -10,7 +10,10 @@ use RabbitEvents\Foundation\Serialization\JsonContentType;
 
 class JsonPayload implements Payload, \JsonSerializable
 {
-    public function __construct(private array|\JsonSerializable $value)
+    /**
+     * @param mixed $value Anything JsonSerializer accepts: arrays, scalars, null, \JsonSerializable, \stdClass
+     */
+    public function __construct(private mixed $value)
     {
     }
 

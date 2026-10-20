@@ -33,4 +33,36 @@ class JsonSerializerTest extends TestCase
         self::assertInstanceOf(Payload::class, $payload);
         self::assertSame(['foo' => 'bar'], $payload->value());
     }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('payloadsAcceptedByCanSerialize')]
+    public function testSerializesEveryPayloadItAccepts(mixed $payload, string $json): void
+    {
+        $serializer = new JsonSerializer();
+
+        self::assertTrue($serializer->canSerialize($payload));
+        self::assertSame($json, $serializer->serialize($payload)->serialize());
+    }
+
+    public static function payloadsAcceptedByCanSerialize(): array
+    {
+        return [
+            'array' => [['a' => 1], '{"a":1}'],
+            'string' => ['hello', '"hello"'],
+            'int' => [42, '42'],
+            'bool' => [true, 'true'],
+            'stdClass' => [(object) ['a' => 1], '{"a":1}'],
+        ];
+    }
+
+    public function testDeserializesJsonScalarsAndNull(): void
+    {
+        $serializer = new JsonSerializer();
+
+        foreach (['"hello"' => 'hello', '42' => 42, 'null' => null] as $body => $value) {
+            $message = new AmqpMessage();
+            $message->setBody((string) $body);
+
+            self::assertSame($value, $serializer->deserialize(new AmqpTransportMessage($message))->value());
+        }
+    }
 }
