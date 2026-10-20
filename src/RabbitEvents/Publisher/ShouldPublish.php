@@ -7,7 +7,7 @@ namespace RabbitEvents\Publisher;
 interface ShouldPublish
 {
     /**
-     * Publisher name that the same as RammitMQ's routing key. Example: `item.created`.
+     * The event name, used as the RabbitMQ routing key. Example: `item.created`.
      *
      * @return string
      */

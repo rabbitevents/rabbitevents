@@ -78,7 +78,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | The default serializer used to serialize/deserialize event payloads.
-    | Supported: "json", "protobuf" or any class implementing Serializer interface.
+    | Any class implementing RabbitEvents\Foundation\Contracts\Serializer, e.g.
+    | JsonSerializer or ProtobufSerializer (rabbitevents/protobuf).
     |
     */
 

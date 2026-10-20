@@ -6,7 +6,6 @@ namespace RabbitEvents\Foundation;
 
 use Illuminate\Support\Carbon;
 use RabbitEvents\Foundation\Contracts\QueueConsumer;
-use RabbitEvents\Foundation\Contracts\Serializer;
 use RabbitEvents\Foundation\Contracts\TransportMessage;
 use RabbitEvents\Foundation\Exceptions\ConnectionLostException;
 use RabbitEvents\Foundation\Exceptions\UnsupportedContentTypeException;
