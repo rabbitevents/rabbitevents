@@ -10,11 +10,13 @@ use RabbitEvents\Foundation\Consumer;
 use RabbitEvents\Foundation\Context;
 use RabbitEvents\Foundation\Contracts\FailedDestination;
 use RabbitEvents\Foundation\Message;
-use RabbitEvents\Listener\Dispatcher;
+use RabbitEvents\Listener\Support\Failer;
 use RabbitEvents\Listener\QueueName;
 
 trait InteractsWithFailedQueue
 {
+    use ResolvesListenerQueue;
+
     protected function getFailedQueueName(): string
     {
         return $this->resolveOriginalQueueName() . FailedDestination::SUFFIX;
@@ -29,12 +31,7 @@ trait InteractsWithFailedQueue
                 : $queue;
         }
 
-        $service = (string) ($this->option('service') ?: ($this->laravel['config']->get('app.name') ?: 'rabbitevents'));
-        $events = $this->option('events')
-            ? explode(',', (string) $this->option('events'))
-            : ($this->laravel->bound(Dispatcher::class) ? $this->laravel[Dispatcher::class]->getEvents() : []);
-
-        return QueueName::resolve($service, $events);
+        return QueueName::resolve($this->resolveServiceName(), $this->resolveEvents($this->option('events')));
     }
 
     protected function getContext(): Context
@@ -64,35 +61,41 @@ trait InteractsWithFailedQueue
             $maxScan = max($maxScan, (int) $this->option('limit'));
         }
 
-        while ($scanned < $maxScan && ($message = $consumer->nextMessage($timeout))) {
-            // A message seen twice means the scan wrapped around, e.g. a retried message failed again.
-            if ($id = $message->id()) {
-                if (isset($seen[$id])) {
-                    $unhandled[] = $message;
-                    break;
+        // Whatever happens, browsed messages that weren't handled go back to the queue.
+        try {
+            while ($scanned < $maxScan && ($message = $consumer->nextMessage($timeout))) {
+                // A message seen twice means the scan wrapped around, e.g. a retried message failed again.
+                if ($id = $message->id()) {
+                    if (isset($seen[$id])) {
+                        $unhandled[] = $message;
+                        break;
+                    }
+
+                    $seen[$id] = true;
                 }
 
-                $seen[$id] = true;
-            }
+                $scanned++;
 
-            $scanned++;
-            $continue = $callback($message, $consumer, $context, $failedQueue);
+                try {
+                    $continue = $callback($message, $consumer, $context, $failedQueue);
+                } finally {
+                    if (!$message->isAcknowledged()) {
+                        $unhandled[] = $message;
+                    }
+                }
 
-            if (!$message->isAcknowledged()) {
-                $unhandled[] = $message;
+                if ($continue === false) {
+                    break;
+                }
             }
-
-            if ($continue === false) {
-                break;
-            }
+        } finally {
+            $consumer->requeue($unhandled);
         }
-
-        $consumer->requeue($unhandled);
     }
 
     protected function extractFailedAt(Message $message): string
     {
-        if ($failedAt = $message->getProperty('x-failed-at')) {
+        if ($failedAt = $message->getProperty(Failer::FAILED_AT)) {
             return Carbon::createFromTimestamp((int) $failedAt)->toDateTimeString();
         }
 
@@ -101,13 +104,13 @@ trait InteractsWithFailedQueue
 
     protected function extractEvent(Message $message): string
     {
-        return $message->getProperty('x-original-routing-key') ?: $message->event;
+        return $message->getProperty(Failer::ORIGINAL_ROUTING_KEY) ?: $message->event;
     }
 
     protected function extractException(Message $message): string
     {
-        return $message->getProperty('x-exception-message')
-            ?? $message->getProperty('x-exception-class')
+        return $message->getProperty(Failer::EXCEPTION_MESSAGE)
+            ?? $message->getProperty(Failer::EXCEPTION_CLASS)
             ?? 'N/A';
     }
 
