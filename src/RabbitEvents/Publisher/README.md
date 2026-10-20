@@ -80,7 +80,7 @@ To **publish** this event, you just need to call the `publish` method of the eve
 ```php
 <?php
 
-$payment = new Payment(...);
+$payment = Payment::findOrFail($paymentId);
 
 // ...
 
@@ -121,7 +121,7 @@ class PaymentSucceededRabbitEvent implements ShouldPublishAfterCommit
 }
 
 // Or per publish:
-publish((new PaymentSucceededRabbitEvent($payment))->afterCommit());
+publish((new PaymentSucceededRabbitEvent($request->user(), $payment))->afterCommit());
 ```
 
 RabbitEvents then delays publishing until the active database transaction commits. If the transaction rolls back, the event is not published. Inside a transaction `publish()` returns `null`, because the message ID is only known once the message is actually sent.
