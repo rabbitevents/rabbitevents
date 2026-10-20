@@ -25,13 +25,6 @@ jobs:
       - name: phpunit
         run: phpunit -c phpunit.xml.dist --log-junit junit.xml
 
-<<<<<<< Updated upstream
       - name: Publish Test & Coverage Summary
         if: always()
         run: php .github/scripts/test-summary.php ${{ matrix.php-versions }}
-=======
-      - name: Upload Codecov coverage
-        uses: codecov/codecov-action@v6
-        with:
-          files: './coverage.xml'
->>>>>>> Stashed changes
