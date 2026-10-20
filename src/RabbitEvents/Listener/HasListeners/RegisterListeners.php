@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace RabbitEvents\Listener\HasListeners;
 
+use RabbitEvents\Listener\Dispatcher;
+
 trait RegisterListeners
 {
     /**
@@ -42,7 +44,7 @@ trait RegisterListeners
             $seenKeys = [];
 
             foreach ($eventListeners as $listener) {
-                $key = $this->normalizeListener($listener);
+                $key = Dispatcher::listenerKey($listener);
 
                 if (!isset($seenKeys[$key])) {
                     $seenKeys[$key] = count($deduplicated[$event] ?? []);
@@ -59,22 +61,5 @@ trait RegisterListeners
         }
 
         return $deduplicated;
-    }
-
-    protected function normalizeListener($listener): string
-    {
-        if (is_array($listener)) {
-            return $listener[0] . '@' . ($listener[1] ?? 'handle');
-        }
-
-        if (is_string($listener)) {
-            if (str_contains($listener, '@')) {
-                return $listener;
-            }
-
-            return $listener . '@handle';
-        }
-
-        return serialize($listener);
     }
 }

@@ -61,10 +61,10 @@ class Dispatcher extends BaseDispatcher
             return false;
         }
 
-        $normalizedListener = $this->normalizeListenerForComparison($listener);
+        $normalizedListener = static::listenerKey($listener);
 
         foreach ($this->listeners[$event] as $existingListener) {
-            if ($normalizedListener === $this->normalizeListenerForComparison($existingListener)) {
+            if ($normalizedListener === static::listenerKey($existingListener)) {
                 return true;
             }
         }
@@ -73,12 +73,10 @@ class Dispatcher extends BaseDispatcher
     }
 
     /**
-     * Normalize a listener to a comparable format.
-     *
-     * @param mixed $listener
-     * @return string
+     * A key that is equal for listener definitions that call the same thing:
+     * "Class", "Class@handle" and [Class, 'handle'] are one listener.
      */
-    protected function normalizeListenerForComparison($listener): string
+    public static function listenerKey(mixed $listener): string
     {
         if (is_array($listener)) {
             $target = is_object($listener[0]) ? spl_object_hash($listener[0]) : $listener[0];
@@ -87,16 +85,10 @@ class Dispatcher extends BaseDispatcher
         }
 
         if (is_string($listener)) {
-            // Strip '::class' suffix if present 
-            if (str_contains($listener, '::class')) {
-                $listener = str_replace('::class', '', $listener);
-            }
+            // Strip '::class' suffix if present
+            $listener = str_replace('::class', '', $listener);
 
-            if (str_contains($listener, '@')) {
-                return $listener;
-            }
-
-            return $listener . '@handle';
+            return str_contains($listener, '@') ? $listener : $listener . '@handle';
         }
 
         if (is_object($listener)) {
@@ -116,10 +108,11 @@ class Dispatcher extends BaseDispatcher
         }
 
         return function ($event, $payload) use ($listener, $wildcard) {
+            $listener = $this->instantiateListener($listener);
             $throughMiddleware = $this->extractMiddleware($listener);
 
-            if (!$wildcard && (!is_array($payload) || Arr::isAssoc($payload))) {
-                $payload = [$payload];
+            if (!$wildcard) {
+                $payload = static::listenerArguments($payload);
             }
 
             if (empty($throughMiddleware)) {
@@ -140,6 +133,15 @@ class Dispatcher extends BaseDispatcher
         };
     }
 
+    /**
+     * A list payload is the list of the listener's arguments; any other payload (an associative array,
+     * a scalar) is the only argument.
+     */
+    protected static function listenerArguments(mixed $payload): array
+    {
+        return !is_array($payload) || Arr::isAssoc($payload) ? [$payload] : $payload;
+    }
+
     protected static array $middlewareExpectsNextCache = [];
 
     /**
@@ -151,15 +153,17 @@ class Dispatcher extends BaseDispatcher
     {
         $expectsNext = $this->middlewareExpectsNext($middleware);
 
+        // Middleware get the same arguments as the listener, after $event for wildcard events.
+        // For a regular event $passable already is the list of the listener's arguments.
         return function ($passable, $next) use ($middleware, $event, $wildcard, $expectsNext) {
             if ($expectsNext) {
                 return $wildcard
                     ? ($middleware)($event, $passable, $next)
-                    : ($middleware)($passable, $next);
+                    : ($middleware)(...[...$passable, static fn(...$arguments) => $next($arguments)]);
             }
 
             $result = $wildcard
-                ? ($middleware)($event, ...array_values($passable))
+                ? ($middleware)($event, ...static::listenerArguments($passable))
                 : ($middleware)(...$passable);
 
             if (false === $result) {
@@ -229,6 +233,26 @@ class Dispatcher extends BaseDispatcher
         return static::$middlewareExpectsNextCache[$key] = $expectsNext;
     }
 
+    /**
+     * Turns a class listener into [instance, method]: one instance per message, shared by the listener's
+     * middleware and its handler, and not kept in the container, so no state leaks into the next message.
+     */
+    protected function instantiateListener(mixed $listener): mixed
+    {
+        if (is_string($listener)) {
+            $listener = Str::parseCallback($listener, 'handle');
+        }
+
+        if (!is_array($listener) || !is_string($listener[0])) {
+            return $listener;
+        }
+
+        $instance = $this->container->make($listener[0]);
+        $method = $listener[1] ?? 'handle';
+
+        return [$instance, method_exists($instance, $method) ? $method : '__invoke'];
+    }
+
     protected function makeListenerInstance($listener)
     {
         if (is_array($listener)) {
@@ -238,7 +262,7 @@ class Dispatcher extends BaseDispatcher
         if (is_string($listener)) {
             [$class,] = Str::parseCallback($listener);
 
-            return $this->container->instance($class, $this->container->make($class));
+            return $this->container->make($class);
         }
 
         if (is_object($listener)) {
