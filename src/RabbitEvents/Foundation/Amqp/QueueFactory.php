@@ -9,6 +9,7 @@ use Interop\Amqp\AmqpDestination;
 use Interop\Amqp\AmqpQueue;
 use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 use RabbitEvents\Foundation\Exceptions\QueueArgumentsMismatchException;
+use Throwable;
 
 class QueueFactory
 {
@@ -30,14 +31,20 @@ class QueueFactory
 
         try {
             $this->context->declareQueue($queue);
-        } catch (AMQPProtocolChannelException $e) {
-            if ($e->getCode() === 406) {
-                throw new QueueArgumentsMismatchException($queueName, $e);
-            }
-
-            throw $e;
+        } catch (Throwable $e) {
+            throw $this->isPreconditionFailed($e) ? new QueueArgumentsMismatchException($queueName, $e) : $e;
         }
 
         return $queue;
+    }
+
+    /**
+     * RabbitMQ replies 406 PRECONDITION_FAILED, thrown by php-amqplib (enqueue/amqp-lib)
+     * or by ext-amqp (enqueue/amqp-ext).
+     */
+    private function isPreconditionFailed(Throwable $e): bool
+    {
+        return $e->getCode() === 406
+            && ($e instanceof AMQPProtocolChannelException || $e instanceof \AMQPException);
     }
 }
