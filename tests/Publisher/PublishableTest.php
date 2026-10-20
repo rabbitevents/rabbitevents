@@ -180,6 +180,28 @@ class PublishableTest extends TestCase
         Listener::assertPublishedTimes(1);
     }
 
+    public function testEventNamedLikeAPhpFunctionIsComparedByName(): void
+    {
+        Listener::fake();
+        Listener::publish(['item' => 1]);
+
+        // "time" is a PHP function: it must not be called as a matcher.
+        Listener::assertPublished('something.happened');
+        Listener::assertNotPublished('time');
+    }
+
+    public function testAssertNotPublishedAcceptsTheSameArgumentsAsAssertPublished(): void
+    {
+        Listener::fake();
+        Listener::publish(['item' => 1]);
+
+        Listener::assertNotPublished('something.happened', ['item' => 2]);
+        Listener::assertNotPublished(['item' => 2]);
+
+        $this->expectException(InvalidCountException::class);
+        Listener::assertNotPublished('something.happened', ['item' => 1]);
+    }
+
     public function testAssertNothingPublishedFailsWhenSomethingWasPublished(): void
     {
         Listener::fake();

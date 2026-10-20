@@ -27,7 +27,7 @@ trait PublishableEventTesting
         callable|string|array|null $event = null,
         ?array $payload = null
     ): void {
-        Container::getInstance()->get(Publisher::class)
+        static::fakePublisher()
             ->shouldHaveReceived()
             ->executePublish(static::createPublishMatcher($event, $payload))
             ->atLeast()
@@ -39,7 +39,7 @@ trait PublishableEventTesting
         callable|string|array|null $event = null,
         ?array $payload = null
     ): void {
-        Container::getInstance()->get(Publisher::class)
+        static::fakePublisher()
             ->shouldHaveReceived()
             ->executePublish(static::createPublishMatcher($event, $payload))
             ->times($times);
@@ -54,7 +54,8 @@ trait PublishableEventTesting
                 return false;
             }
 
-            if (is_callable($event)) {
+            // A string is an event name even if a PHP function has that name (e.g. "mail").
+            if (is_callable($event) && !is_string($event)) {
                 return (bool) $event($object, $object->toPublish());
             }
 
@@ -71,17 +72,26 @@ trait PublishableEventTesting
         });
     }
 
-    public static function assertNotPublished(callable|string|null $callback = null): void
-    {
-        Container::getInstance()->make(Publisher::class)
+    public static function assertNotPublished(
+        callable|string|array|null $event = null,
+        ?array $payload = null
+    ): void {
+        static::fakePublisher()
             ->shouldNotHaveReceived()
-            ->executePublish(static::createPublishMatcher($callback));
+            ->executePublish(static::createPublishMatcher($event, $payload));
     }
 
     public static function assertNothingPublished(): void
     {
         // A method name without arguments matches calls with any arguments.
-        Container::getInstance()->make(Publisher::class)
-            ->shouldNotHaveReceived('executePublish');
+        static::fakePublisher()->shouldNotHaveReceived('executePublish');
+    }
+
+    /**
+     * @return Publisher&\Mockery\MockInterface
+     */
+    private static function fakePublisher(): Publisher
+    {
+        return Container::getInstance()->make(Publisher::class);
     }
 }
