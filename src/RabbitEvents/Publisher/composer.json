@@ -28,6 +28,7 @@
     "ext-json": "*",
     "illuminate/console": "^11.0|^12.0|^13.0",
     "illuminate/container": "^11.0|^12.0|^13.0",
+    "illuminate/log": "^11.0|^12.0|^13.0",
     "illuminate/support": "^11.0|^12.0|^13.0",
     "rabbitevents/foundation": "self.version",
     "ramsey/uuid": "^4.7"
