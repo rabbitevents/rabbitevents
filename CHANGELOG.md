@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file.
 
+> **9.x is the last version of `nuwber/rabbitevents`.** RabbitEvents continues as [`rabbitevents/rabbitevents`](https://github.com/rabbitevents/rabbitevents) 10.0+; see its [changelog](https://github.com/rabbitevents/rabbitevents/blob/10.x/CHANGELOG.md) and the [upgrade guide](https://github.com/rabbitevents/rabbitevents/tree/10.x#upgrade_9.x-10.x).
+
 ## [9.0.0]
 
 ### Added

@@ -7,13 +7,45 @@
 [![License](https://img.shields.io/packagist/l/nuwber/rabbitevents)](https://packagist.org/packages/nuwber/rabbitevents)
 
 > [!IMPORTANT]
-> **Repository & Package Migration Announcement**
+> **`nuwber/rabbitevents` is no longer developed. 9.x is its last version.**
 >
-> RabbitEvents has moved to its own dedicated organization!
-> - **GitHub Repository**: [github.com/rabbitevents/rabbitevents](https://github.com/rabbitevents/rabbitevents) (formerly `nuwber/rabbitevents`)
-> - **Composer Package**: `rabbitevents/rabbitevents` (starting from version 10.0)
->
-> Please update your `composer.json` to require `rabbitevents/rabbitevents:^10.0`. All PHP classes and namespaces (`RabbitEvents\...`) remain identical, so no application code changes are required.
+> RabbitEvents continues as **[`rabbitevents/rabbitevents`](https://packagist.org/packages/rabbitevents/rabbitevents)** at **[github.com/rabbitevents/rabbitevents](https://github.com/rabbitevents/rabbitevents)**, starting with 10.0. New features and fixes are released there only. See [Moving to RabbitEvents 10](#moving-to-10) below.
+
+## Moving to RabbitEvents 10<a name="moving-to-10"></a>
+
+### How to switch
+
+```bash
+composer remove nuwber/rabbitevents
+composer require rabbitevents/rabbitevents:^10.0
+```
+
+If you require the components directly (`rabbitevents/foundation`, `rabbitevents/publisher`, `rabbitevents/listener`), keep their names and change the constraint to `^10.0`. PHP namespaces (`RabbitEvents\...`) don't change.
+
+**No big-bang migration is needed.** 9.x and 10.x use the same exchanges, queues and message format: services can be upgraded one at a time, and 9.x and 10.x workers can even consume the same queue.
+
+### What changes for you
+
+- **Requirements:** PHP 8.2+ and Laravel 11, 12 or 13 (9.x also supported Laravel 10).
+- **`publish()` returns the message ID** (`?string`) instead of `void`.
+- **Failed messages are kept.** A message that failed all its tries is moved to a `{queue}.failed` queue instead of being dropped, so `rabbitevents:listen` creates one such queue per listener queue. Manage failed messages with `rabbitevents:failed`, `rabbitevents:retry`, `rabbitevents:forget` and `rabbitevents:flush`, or set `RABBITEVENTS_FAILED_QUEUE_ENABLED=false` to drop them as before.
+- **Interrupted messages are not lost.** If processing throws outside the listeners, the message is put back into the queue instead of being acknowledged.
+- **Custom transports** must implement a few new contract methods (`Connection::makeFailedQueue()`, `QueueConsumer::requeue()`, `TransportMessage::getMessageId()`, ...). Custom serializers and applications that only publish and listen don't need code changes.
+
+### What you get
+
+- Message IDs in logs, with the handling duration.
+- Retries skip the listeners that already succeeded.
+- Publishing after the database transaction commits: `ShouldPublishAfterCommit` / `->afterCommit()`.
+- Laravel `Context` propagated from publishers to listeners.
+- Onion-style listener middleware with `$next`, and more testing assertions.
+- Optional [deduplication](https://github.com/rabbitevents/deduplication) of redelivered messages.
+
+Full details: [upgrade guide](https://github.com/rabbitevents/rabbitevents/tree/10.x#upgrade_9.x-10.x) and [changelog](https://github.com/rabbitevents/rabbitevents/blob/10.x/CHANGELOG.md).
+
+---
+
+> The documentation below is for RabbitEvents 9.x.
 
 Let's imagine a use case: a User made a payment. You need to handle this payment, register the user, send him emails, send analytics data to your analysis system, and so on. The modern infrastructure requires you to create microservices that do their specific job and only it: one handles payments, one is for user management, one is the mailing system, one is for analysis. How to let all of them know that a payment succeeded and handle this message? The answer is "To use RabbitEvents".
 
@@ -23,6 +55,7 @@ Once again, the RabbitEvents library helps you publish an event and handle it in
 ![rabbit-events-demo](https://github.com/nuwber/rabbitevents/assets/142213350/89df6194-e49d-4d58-8286-8932f182da4b)
 
 ## Table of Contents
+1. [Moving to RabbitEvents 10](#moving-to-10)
 1. [Installation via Composer](#installation)
    * [Configuration](#configuration)
 1. [Upgrade from 8.x to 9.x](#upgrade_8.x-9.x)
