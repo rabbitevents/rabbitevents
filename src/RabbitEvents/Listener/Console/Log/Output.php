@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Console\Log;
 
 use Illuminate\Console\OutputStyle;
-use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Carbon;
 use RabbitEvents\Listener\Events\ListenerHandled;
 use RabbitEvents\Listener\Events\ListenerHandlerExceptionOccurred;
@@ -14,7 +13,7 @@ use Symfony\Component\Console\Application as ConsoleApplication;
 
 class Output extends Writer
 {
-    public function __construct(protected Container $app, protected OutputStyle $output)
+    public function __construct(protected OutputStyle $output)
     {
     }
 

@@ -5,15 +5,11 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Console;
 
 use Illuminate\Console\Command;
-use RabbitEvents\Listener\HasListeners\ListenerDiscoverer;
-use RabbitEvents\Listener\HasListeners\RegisterListeners;
 use RabbitEvents\Listener\ListenerServiceProvider;
 use Throwable;
 
 class EventsCacheCommand extends Command
 {
-    use RegisterListeners;
-
     /**
      * The name and signature of the console command.
      *
@@ -39,7 +35,7 @@ class EventsCacheCommand extends Command
 
         $listeners = $this->getListeners();
 
-        $cachePath = $this->laravel->bootstrapPath('cache/rabbitevents.php');
+        $cachePath = $this->laravel->bootstrapPath(ListenerServiceProvider::CACHE_FILE);
 
         try {
             file_put_contents(
@@ -61,19 +57,7 @@ class EventsCacheCommand extends Command
         $listeners = [];
 
         foreach ($this->laravel->getProviders(ListenerServiceProvider::class) as $provider) {
-            if (method_exists($provider, 'discoverEvents')) {
-                $listenerClasses = $provider->discoverEvents();
-            } else {
-                $listenerClasses = ListenerDiscoverer::discover(
-                    $this->laravel->path('Listeners'),
-                    $this->laravel->path(),
-                    $this->laravel->getNamespace()
-                );
-            }
-
-            foreach ($listenerClasses as $class) {
-                $listeners = array_merge_recursive($listeners, ListenerDiscoverer::eventsFromClass($class));
-            }
+            $listeners = array_merge_recursive($listeners, $provider->attributeListeners());
         }
 
         return $listeners;
