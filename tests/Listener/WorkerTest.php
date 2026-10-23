@@ -4,15 +4,19 @@ namespace RabbitEvents\Tests\Listener;
 
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Support\Carbon;
 use Mockery as m;
 use RabbitEvents\Foundation\Consumer;
 use RabbitEvents\Foundation\Exceptions\ConnectionLostException;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Dispatcher;
+use RabbitEvents\Listener\Events\KillSwitchRestarted;
+use RabbitEvents\Listener\Events\KillSwitchTripped;
 use RabbitEvents\Listener\Events\MessageProcessingFailed;
 use RabbitEvents\Listener\Events\WorkerStopping;
 use RabbitEvents\Listener\ListenerOptions;
 use RabbitEvents\Listener\Message\Processor;
+use RabbitEvents\Listener\Support\KillSwitch;
 use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Listener\Worker;
 use RabbitEvents\Listener\WorkerExitStatus;
@@ -200,6 +204,88 @@ class WorkerTest extends TestCase
             ->setTransportMessage(new \RabbitEvents\Tests\Foundation\Stubs\TransportMessageStub('{"id":1}', ['x-attempts' => 1]));
     }
 
+    public function testKillSwitchStopsConsumingForRestartTimeoutWhenTooManyMessagesFail(): void
+    {
+        Carbon::setTestNow('2026-10-23 12:00:00');
+        $log = [];
+
+        $worker = new TestWorker($this->exceptionHandler, $this->events);
+        $worker->setKillSwitch(new KillSwitch(activationThreshold: 2, tripThreshold: 100, restartTimeout: 3));
+        $worker->onSleep = function (int $seconds) use (&$log) {
+            $log[] = "sleep $seconds";
+            Carbon::setTestNow(Carbon::now()->addSeconds($seconds));
+        };
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->andReturnUsing(function () use (&$log, $worker) {
+            $log[] = 'next';
+
+            if (count(array_keys($log, 'next')) > 2) {
+                $worker->shouldQuit = true;
+
+                return null;
+            }
+
+            return $this->createRealMessage();
+        });
+        $consumer->shouldReceive('reject');
+
+        $worker->work($this->processorThrowing(new \RuntimeException('Database is down')), $consumer, $this->options);
+
+        self::assertSame(['next', 'next', 'sleep 1', 'sleep 1', 'sleep 1', 'next'], $log);
+        $this->events->shouldHaveReceived('dispatch')->with(m::on(
+            fn($event) => $event instanceof KillSwitchTripped && $event->restartTimeout === 3
+        ))->once();
+        $this->events->shouldHaveReceived('dispatch')->with(m::type(KillSwitchRestarted::class))->once();
+
+        Carbon::setTestNow();
+    }
+
+    public function testKillSwitchIsNotTrippedBySucceededMessages(): void
+    {
+        $worker = new TestWorker($this->exceptionHandler, $this->events);
+        $worker->setKillSwitch(new KillSwitch(activationThreshold: 1, tripThreshold: 1));
+        $worker->onSleep = fn() => self::fail('The worker must not pause');
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->times(3)->andReturn(
+            $this->createRealMessage(),
+            $this->createRealMessage(),
+            null
+        );
+        $consumer->shouldReceive('acknowledge')->twice();
+        $consumer->shouldReceive('nextMessage')->andReturnUsing(function () use ($worker) {
+            $worker->shouldQuit = true;
+
+            return null;
+        });
+
+        $worker->work(m::spy(Processor::class), $consumer, $this->options);
+
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(KillSwitchTripped::class)]);
+    }
+
+    public function testWorkerStoppedWhilePausedQuitsWithoutWaitingForRestart(): void
+    {
+        $worker = new TestWorker($this->exceptionHandler, $this->events);
+        $worker->setKillSwitch(new KillSwitch(activationThreshold: 1, tripThreshold: 100, restartTimeout: 60));
+        $slept = 0;
+        $worker->onSleep = function () use (&$slept, $worker) {
+            $slept++;
+            $worker->shouldQuit = true; // SIGTERM
+        };
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
+        $consumer->shouldReceive('reject');
+
+        $status = $worker->work($this->processorThrowing(new \RuntimeException()), $consumer, $this->options);
+
+        self::assertSame(WorkerExitStatus::SUCCESS, $status);
+        self::assertSame(1, $slept);
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(KillSwitchRestarted::class)]);
+    }
+
     public function testProcessNotStartedIfExceededMaxAttempts(): void
     {
         $message = $this->createMessageMock();
@@ -332,6 +418,7 @@ class TestWorker extends Worker
 {
     public $exitStatus;
     public $resetTimeoutHandler = false;
+    public ?\Closure $onSleep = null;
 
     public function kill(\RabbitEvents\Listener\WorkerExitStatus|int $status = 0): void
     {
@@ -341,5 +428,10 @@ class TestWorker extends Worker
     protected function resetTimeoutHandler()
     {
         $this->resetTimeoutHandler = true;
+    }
+
+    protected function sleep(int $seconds): void
+    {
+        ($this->onSleep)($seconds);
     }
 }

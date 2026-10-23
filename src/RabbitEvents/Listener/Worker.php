@@ -6,20 +6,26 @@ namespace RabbitEvents\Listener;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher as EventsDispatcher;
+use Illuminate\Support\InteractsWithTime;
 use RabbitEvents\Foundation\Consumer;
 use RabbitEvents\Foundation\Contracts\Transport;
 use RabbitEvents\Foundation\Exceptions\ConnectionLostException;
 use RabbitEvents\Foundation\Message;
+use RabbitEvents\Listener\Events\KillSwitchRestarted;
+use RabbitEvents\Listener\Events\KillSwitchTripped;
 use RabbitEvents\Listener\Events\MessageProcessingFailed;
 use RabbitEvents\Listener\Events\WorkerStopping;
 use RabbitEvents\Listener\Exceptions\MaxAttemptsExceededException;
 use RabbitEvents\Listener\Exceptions\TimeoutExceededException;
 use RabbitEvents\Listener\Message\Processor;
+use RabbitEvents\Listener\Support\KillSwitch;
 use RabbitEvents\Listener\Support\Releaser;
 use Throwable;
 
 class Worker
 {
+    use InteractsWithTime;
+
     /**
      * Indicates if the worker should exit.
      */
@@ -28,6 +34,8 @@ class Worker
     protected ?Transport $failer = null;
 
     protected ?Releaser $releaser = null;
+
+    protected ?KillSwitch $killSwitch = null;
 
     public function __construct(
         private ExceptionHandler $exceptions,
@@ -48,6 +56,13 @@ class Worker
     public function setReleaser(?Releaser $releaser): self
     {
         $this->releaser = $releaser;
+
+        return $this;
+    }
+
+    public function setKillSwitch(?KillSwitch $killSwitch): self
+    {
+        $this->killSwitch = $killSwitch;
 
         return $this;
     }
@@ -79,6 +94,10 @@ class Worker
                     $consumer->acknowledge($message);
                 } else {
                     $this->returnInterruptedMessage($message, $consumer, $options);
+                }
+
+                if ($this->killSwitch?->record(failed: !$completed)) {
+                    $this->pauseUntilRestart($this->killSwitch);
                 }
             }
 
@@ -143,6 +162,33 @@ class Worker
         }
 
         $message->isReleased() ? $consumer->acknowledge($message) : $consumer->reject($message, true);
+    }
+
+    /**
+     * Stop consuming while the kill switch is tripped. Messages stay in the queue meanwhile: the consumer
+     * fetches them one by one, so none is held unacknowledged. A stopped worker (SIGTERM) quits at once.
+     */
+    protected function pauseUntilRestart(KillSwitch $killSwitch): void
+    {
+        $this->events->dispatch(new KillSwitchTripped($killSwitch->restartTimeout));
+
+        $restartAt = $this->currentTime() + $killSwitch->restartTimeout;
+
+        while (!$this->shouldQuit && $this->currentTime() < $restartAt) {
+            $this->sleep(1);
+        }
+
+        if ($this->shouldQuit) {
+            return;
+        }
+
+        $killSwitch->restart();
+        $this->events->dispatch(new KillSwitchRestarted());
+    }
+
+    protected function sleep(int $seconds): void
+    {
+        sleep($seconds);
     }
 
     /**

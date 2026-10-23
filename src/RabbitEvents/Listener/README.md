@@ -18,6 +18,7 @@ If you only need to handle events, you can use the RabbitEvents `Listener` separ
 6. [Stopping The Propagation Of An Event](#stopping-propagation)
 7. [Reliability](#reliability)
    - [Failed Messages](#failed-messages)
+   - [Kill Switch](#kill-switch)
    - [Deduplication](#deduplication)
 8. [Console Commands](#commands)
    - [Command `rabbitevents:listen`](#command-listen)
@@ -327,6 +328,27 @@ A message fails when a listener exhausts its tries (`--tries`), exceeds the time
 If processing throws outside the listeners (e.g. in a custom `Deduplicator`), the message is not acknowledged as handled. It is put back into its queue the same way a failed listener releases it (after `--sleep`, counting as an attempt), with `x-succeeded-listeners`, so the listeners that already handled it skip it. Only if the message can't be put back (e.g. the broker is unavailable) is the original returned to RabbitMQ unchanged, and then its listeners run again.
 
 Manage failed messages with the [failed message commands](#failed-commands). To drop failed messages instead, as 9.x did, set `RABBITEVENTS_FAILED_QUEUE_ENABLED=false` (`rabbitevents.failed_queue.enabled`).
+
+## Kill Switch <a name="kill-switch"></a>
+
+When a database or an API the listeners need is down, every message fails. With `--tries=1` the worker moves the whole queue to `{queue}.failed` within minutes. The kill switch stops the worker from consuming instead, until the dependency is likely back:
+
+- It trips when at least `trip_threshold` percent of the messages the worker handled in the last `tracking_period` seconds failed, once it handled `activation_threshold` messages in that period. A failed message is one whose listener threw, whether it was released for another try or moved to `{queue}.failed`.
+- Then the worker consumes nothing for `restart_timeout` seconds. The messages stay ready in the queue: the worker fetches messages one by one, so it holds none unacknowledged, and other workers can take them. The message that tripped the switch was already released or failed as usual.
+- After the pause, the first message is a probe: if it fails, the switch trips again right away; if it succeeds, the worker goes back to counting.
+- Each worker decides on its own, from the messages it handled itself; no storage is needed. `SIGTERM` stops a paused worker at once.
+
+It is disabled by default. Enable it in `config/rabbitevents.php` or with environment variables:
+
+```dotenv
+RABBITEVENTS_KILL_SWITCH_ENABLED=true
+RABBITEVENTS_KILL_SWITCH_ACTIVATION_THRESHOLD=10 # messages
+RABBITEVENTS_KILL_SWITCH_TRIP_THRESHOLD=15       # percent of failed messages
+RABBITEVENTS_KILL_SWITCH_TRACKING_PERIOD=60      # seconds
+RABBITEVENTS_KILL_SWITCH_RESTART_TIMEOUT=60      # seconds
+```
+
+The worker dispatches `RabbitEvents\Listener\Events\KillSwitchTripped` (with `$restartTimeout`) and `KillSwitchRestarted`; listen to them for alerts. If you enable AMQP heartbeats (`RABBITEVENTS_HEARTBEAT`), keep `restart_timeout` below twice the heartbeat: a paused worker doesn't talk to the broker, which then closes the connection, and the worker exits for Supervisor to restart it.
 
 ## Deduplication <a name="deduplication"></a>
 
