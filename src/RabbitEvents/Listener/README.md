@@ -334,9 +334,9 @@ Manage failed messages with the [failed message commands](#failed-commands). To 
 When a database or an API the listeners need is down, every message fails. With `--tries=1` the worker moves the whole queue to `{queue}.failed` within minutes. The kill switch stops the worker from consuming instead, until the dependency is likely back:
 
 - It trips when at least `trip_threshold` percent of the messages the worker handled in the last `tracking_period` seconds failed, once it handled `activation_threshold` messages in that period. A failed message is one whose listener threw, whether it was released for another try or moved to `{queue}.failed`.
-- Then the worker consumes nothing for `restart_timeout` seconds. The messages stay ready in the queue: the worker fetches messages one by one, so it holds none unacknowledged, and other workers can take them. The message that tripped the switch was already released or failed as usual.
+- Then the worker consumes nothing for `restart_timeout` seconds. The messages stay ready in the queue: with RabbitMQ the worker fetches messages one by one, so it holds none unacknowledged, and other workers can take them. (The Redis transport may have read one more message into its buffer: it stays pending for this worker until the pause ends.) The message that tripped the switch was already released or failed as usual.
 - After the pause, the first message is a probe: if it fails, the switch trips again right away; if it succeeds, the worker goes back to counting.
-- Each worker decides on its own, from the messages it handled itself; no storage is needed. `SIGTERM` stops a paused worker at once.
+- Each worker decides on its own, from the messages it handled itself; no storage is needed. A worker that has to stop anyway (`SIGTERM`, `--memory` exceeded) stops instead of pausing, and `SIGTERM` stops a paused worker at once.
 
 It is disabled by default. Enable it in `config/rabbitevents.php` or with environment variables:
 

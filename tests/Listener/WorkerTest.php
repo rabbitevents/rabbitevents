@@ -286,6 +286,64 @@ class WorkerTest extends TestCase
         $this->events->shouldNotHaveReceived('dispatch', [m::type(KillSwitchRestarted::class)]);
     }
 
+    public function testWorkerOverMemoryLimitExitsInsteadOfPausing(): void
+    {
+        $worker = new TestWorker($this->exceptionHandler, $this->events);
+        $worker->setKillSwitch(new KillSwitch(activationThreshold: 1, tripThreshold: 100));
+        $worker->onSleep = fn() => self::fail('The worker must not pause');
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
+        $consumer->shouldReceive('reject');
+
+        $status = $worker->work(
+            $this->processorThrowing(new \RuntimeException()),
+            $consumer,
+            $this->createListenerOptions(['memory' => 0])
+        );
+
+        self::assertSame(WorkerExitStatus::MEMORY_LIMIT, $status);
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(KillSwitchTripped::class)]);
+    }
+
+    public function testWorkerStoppedWhileHandlingTheTrippingMessageExitsInsteadOfPausing(): void
+    {
+        $worker = new TestWorker($this->exceptionHandler, $this->events);
+        $worker->setKillSwitch(new KillSwitch(activationThreshold: 1, tripThreshold: 100));
+        $worker->onSleep = fn() => self::fail('The worker must not pause');
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
+        $consumer->shouldReceive('reject');
+
+        $processor = m::mock(Processor::class);
+        $processor->shouldReceive('process')->andReturnUsing(function () use ($worker) {
+            $worker->shouldQuit = true; // SIGTERM
+
+            throw new \RuntimeException();
+        });
+
+        self::assertSame(WorkerExitStatus::SUCCESS, $worker->work($processor, $consumer, $this->options));
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(KillSwitchTripped::class)]);
+    }
+
+    public function testWorkerOverMemoryLimitAfterPauseExitsWithoutFetchingAnotherMessage(): void
+    {
+        $worker = new TestWorker($this->exceptionHandler, $this->events);
+        $worker->setKillSwitch(new KillSwitch(activationThreshold: 1, tripThreshold: 100, restartTimeout: 1));
+        $worker->onSleep = fn() => Carbon::setTestNow(Carbon::now()->addSecond());
+        $worker->memoryExceededAfterSleep = true;
+
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
+        $consumer->shouldReceive('reject');
+
+        $status = $worker->work($this->processorThrowing(new \RuntimeException()), $consumer, $this->options);
+
+        self::assertSame(WorkerExitStatus::MEMORY_LIMIT, $status);
+        Carbon::setTestNow();
+    }
+
     public function testProcessNotStartedIfExceededMaxAttempts(): void
     {
         $message = $this->createMessageMock();
@@ -419,6 +477,8 @@ class TestWorker extends Worker
     public $exitStatus;
     public $resetTimeoutHandler = false;
     public ?\Closure $onSleep = null;
+    public bool $memoryExceededAfterSleep = false;
+    private bool $slept = false;
 
     public function kill(\RabbitEvents\Listener\WorkerExitStatus|int $status = 0): void
     {
@@ -432,6 +492,12 @@ class TestWorker extends Worker
 
     protected function sleep(int $seconds): void
     {
+        $this->slept = true;
         ($this->onSleep)($seconds);
+    }
+
+    protected function memoryExceeded(int $memoryLimit): bool
+    {
+        return ($this->memoryExceededAfterSleep && $this->slept) || parent::memoryExceeded($memoryLimit);
     }
 }

@@ -77,6 +77,8 @@ class Worker
         }
 
         while (true) {
+            $tripped = false;
+
             if ($message = $this->getNextMessage($consumer)) {
                 if ($supportsAsyncSignals) {
                     $this->registerTimeoutHandler($message, $consumer, $options);
@@ -96,12 +98,16 @@ class Worker
                     $this->returnInterruptedMessage($message, $consumer, $options);
                 }
 
-                if ($this->killSwitch?->record(failed: !$completed)) {
-                    $this->pauseUntilRestart($this->killSwitch);
-                }
+                $tripped = (bool) $this->killSwitch?->record(failed: !$completed);
             }
 
             $status = $this->stopIfNecessary($options);
+
+            // A worker that must stop anyway doesn't pause first, nor fetch a message after the pause.
+            if (is_null($status) && $tripped) {
+                $this->pauseUntilRestart($this->killSwitch);
+                $status = $this->stopIfNecessary($options);
+            }
 
             if (!is_null($status)) {
                 return $this->stop($status);
@@ -165,7 +171,7 @@ class Worker
     }
 
     /**
-     * Stop consuming while the kill switch is tripped. Messages stay in the queue meanwhile: the consumer
+     * Stop consuming while the kill switch is tripped. Messages stay in the queue meanwhile: the AMQP consumer
      * fetches them one by one, so none is held unacknowledged. A stopped worker (SIGTERM) quits at once.
      */
     protected function pauseUntilRestart(KillSwitch $killSwitch): void
