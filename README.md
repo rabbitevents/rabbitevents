@@ -33,6 +33,7 @@ RabbitEvents helps you publish an event and handle it seamlessly in other applic
 1. [Reliability & Guarantees (Zero-DB Architecture)](#reliability)
    * [Message IDs & Observability](#message-ids)
    * [Failed Messages](#failed-messages)
+   * [Kill Switch](#kill-switch)
    * [Deduplication](#deduplication)
    * [Transactional Publishing (ShouldPublishAfterCommit)](#transactional-publishing)
    * [Distributed Tracing & Context Propagation](#distributed-tracing)
@@ -324,6 +325,15 @@ php artisan rabbitevents:flush
 ```
 
 See the [Listener documentation](./src/RabbitEvents/Listener/README.md#failed-messages) for details.
+
+### Kill Switch<a name="kill-switch"></a>
+When a dependency of the listeners is down and most messages fail, a worker with the kill switch stops consuming for a while instead of moving the whole queue to `{queue}.failed`. The untouched messages stay in the queue. It is disabled by default:
+
+```dotenv
+RABBITEVENTS_KILL_SWITCH_ENABLED=true
+```
+
+See the [Listener documentation](./src/RabbitEvents/Listener/README.md#kill-switch) for the thresholds and events.
 
 ### Deduplication<a name="deduplication"></a>
 RabbitMQ delivers a message *at least once*: when the acknowledgement doesn't reach it (lost connection, killed worker), it delivers the message again. RabbitEvents relies on RabbitMQ only and doesn't deduplicate such redeliveries, so listeners should be idempotent. If your service has a cache store shared by its workers, the optional [`rabbitevents/deduplication`](https://github.com/rabbitevents/deduplication) package skips messages redelivered after they were handled. See the [Listener documentation](./src/RabbitEvents/Listener/README.md#deduplication).

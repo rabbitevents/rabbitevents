@@ -15,6 +15,7 @@ use RabbitEvents\Foundation\Contracts\Producer;
 use RabbitEvents\Foundation\Contracts\QueueConsumer;
 use RabbitEvents\Listener\Console\ListenCommand;
 use RabbitEvents\Listener\Dispatcher;
+use RabbitEvents\Listener\Support\KillSwitch;
 use RabbitEvents\Listener\Worker;
 use RabbitEvents\Listener\WorkerExitStatus;
 use RabbitEvents\Tests\Listener\TestCase;
@@ -187,8 +188,46 @@ class ListenCommandTest extends TestCase
         $context->shouldHaveReceived('makeQueue')->with('rabbitevents:user.created,user.updated', ['user.created', 'user.updated'], m::any());
     }
 
+    public function test_kill_switch_is_disabled_by_default(): void
+    {
+        [, , , $worker] = $this->runListen($this->appListening('user.created'), ['events' => 'user.created']);
+
+        $worker->shouldNotHaveReceived('setKillSwitch');
+    }
+
+    public function test_kill_switch_is_configured_from_config(): void
+    {
+        $app = $this->appListening('user.created', [
+            'rabbitevents.kill_switch.enabled' => true,
+            // env() values are strings
+            'rabbitevents.kill_switch.activation_threshold' => '5',
+            'rabbitevents.kill_switch.trip_threshold' => '50',
+            'rabbitevents.kill_switch.tracking_period' => '30',
+            'rabbitevents.kill_switch.restart_timeout' => '120',
+        ]);
+
+        [, , , $worker] = $this->runListen($app, ['events' => 'user.created']);
+
+        $worker->shouldHaveReceived('setKillSwitch')->with(m::on(
+            fn(KillSwitch $switch) => $switch->activationThreshold === 5
+                && $switch->tripThreshold === 50
+                && $switch->trackingPeriod === 30
+                && $switch->restartTimeout === 120
+        ))->once();
+    }
+
+    private function appListening(string $event, array $config = []): Container
+    {
+        $app = $this->createMockApplication($config);
+        $dispatcher = new Dispatcher($app);
+        $dispatcher->listen($event, static function () {});
+        $app->instance(Dispatcher::class, $dispatcher);
+
+        return $app;
+    }
+
     /**
-     * @return array{int, string, Context&m\MockInterface}
+     * @return array{int, string, Context&m\MockInterface, Worker&m\MockInterface}
      */
     private function runListen(Container $app, array $input): array
     {
@@ -208,13 +247,12 @@ class ListenCommandTest extends TestCase
         $context->shouldReceive('createProducer')->andReturn(m::mock(Producer::class));
         $context->shouldReceive('makeConsumer')->andReturn(m::mock(\RabbitEvents\Foundation\Consumer::class));
 
-        $worker = m::mock(Worker::class);
-        $worker->shouldReceive('setReleaser', 'setFailer');
+        $worker = m::spy(Worker::class);
         $worker->shouldReceive('work')->andReturn(WorkerExitStatus::SUCCESS);
 
         $result = $command->handle($context, $worker);
 
-        return [$result, $bufferedOutput->fetch(), $context];
+        return [$result, $bufferedOutput->fetch(), $context, $worker];
     }
 
     private function createMockApplication(array $config = []): Container

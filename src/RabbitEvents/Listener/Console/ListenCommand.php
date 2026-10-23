@@ -9,11 +9,14 @@ use RabbitEvents\Foundation\Connection\ConnectionManager;
 use RabbitEvents\Foundation\Context;
 use RabbitEvents\Listener\Contracts\Deduplicator;
 use RabbitEvents\Listener\Support\Failer;
+use RabbitEvents\Listener\Support\KillSwitch;
 use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Listener\Dispatcher;
 use RabbitEvents\Listener\Events\ListenerHandled;
 use RabbitEvents\Listener\Events\ListenerHandleFailed;
 use RabbitEvents\Listener\Events\ListenerHandlerExceptionOccurred;
+use RabbitEvents\Listener\Events\KillSwitchRestarted;
+use RabbitEvents\Listener\Events\KillSwitchTripped;
 use RabbitEvents\Listener\Events\ListenerHandling;
 use RabbitEvents\Listener\Events\MessageProcessingFailed;
 use RabbitEvents\Listener\Events\WorkerStopping;
@@ -120,6 +123,10 @@ class ListenCommand extends Command
             $worker->setFailer(new Failer($context->makeFailedQueue($queueName), $context->createProducer()));
         }
 
+        if ($this->laravel['config']->get('rabbitevents.kill_switch.enabled', false)) {
+            $worker->setKillSwitch($this->makeKillSwitch());
+        }
+
         return $worker->work(
             new Processor(
                 $handlerFactory,
@@ -151,6 +158,18 @@ class ListenCommand extends Command
         );
     }
 
+    protected function makeKillSwitch(): KillSwitch
+    {
+        $config = $this->laravel['config'];
+
+        return new KillSwitch(
+            (int)$config->get('rabbitevents.kill_switch.activation_threshold', 10),
+            (int)$config->get('rabbitevents.kill_switch.trip_threshold', 15),
+            (int)$config->get('rabbitevents.kill_switch.tracking_period', 60),
+            (int)$config->get('rabbitevents.kill_switch.restart_timeout', 60),
+        );
+    }
+
     /**
      * Listen for the queue events in order to update the console output.
      *
@@ -170,6 +189,14 @@ class ListenCommand extends Command
         $this->laravel['events']->listen(ListenerHandlerExceptionOccurred::class, $callback);
         $this->laravel['events']->listen(MessageProcessingFailed::class, function ($event) {
             $this->output->error('Message processing failed with the exception: ' . $event->exception->getMessage());
+        });
+        $this->laravel['events']->listen(KillSwitchTripped::class, function ($event) {
+            $this->output->warning(
+                "Kill switch tripped: too many messages failed. Consuming stopped for {$event->restartTimeout}s."
+            );
+        });
+        $this->laravel['events']->listen(KillSwitchRestarted::class, function () {
+            $this->output->info('Kill switch restarted: consuming again.');
         });
         $this->laravel['events']->listen(WorkerStopping::class, function ($event) {
             $this->output->info('Worker has been stopped with the status code ' . $event->status);

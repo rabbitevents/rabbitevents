@@ -66,6 +66,29 @@ return [
         'enabled' => env('RABBITEVENTS_FAILED_QUEUE_ENABLED', true),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Kill Switch
+    |--------------------------------------------------------------------------
+    |
+    | Stops a worker from consuming when too many messages fail, e.g. while a
+    | database its listeners need is down, instead of moving the whole queue
+    | to `{queue}.failed`. It trips when at least `trip_threshold` percent of
+    | the messages handled in the last `tracking_period` seconds failed (once
+    | `activation_threshold` messages were handled) and pauses the worker for
+    | `restart_timeout` seconds. If the first message after the pause fails,
+    | the worker pauses again.
+    |
+    */
+
+    'kill_switch' => [
+        'enabled' => env('RABBITEVENTS_KILL_SWITCH_ENABLED', false),
+        'activation_threshold' => env('RABBITEVENTS_KILL_SWITCH_ACTIVATION_THRESHOLD', 10),
+        'trip_threshold' => env('RABBITEVENTS_KILL_SWITCH_TRIP_THRESHOLD', 15),
+        'tracking_period' => env('RABBITEVENTS_KILL_SWITCH_TRACKING_PERIOD', 60),
+        'restart_timeout' => env('RABBITEVENTS_KILL_SWITCH_RESTART_TIMEOUT', 60),
+    ],
+
     'logging' => [
         'enabled' => env('RABBITEVENTS_LOG_ENABLED', false),
         'level' => env('RABBITEVENTS_LOG_LEVEL', 'info'),

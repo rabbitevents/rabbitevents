@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Kill switch**: a worker stops consuming for `restart_timeout` seconds when at least `trip_threshold` percent of the messages it handled in the last `tracking_period` seconds failed (after `activation_threshold` messages), instead of moving the whole queue to `{queue}.failed` while a dependency is down. After the pause, a failing first message trips it again. Disabled by default (`rabbitevents.kill_switch.enabled`, `RABBITEVENTS_KILL_SWITCH_*`); the worker dispatches `KillSwitchTripped` and `KillSwitchRestarted`. Nothing changes on the wire.
+
 ## [10.0.1]
 
 ### Fixed
