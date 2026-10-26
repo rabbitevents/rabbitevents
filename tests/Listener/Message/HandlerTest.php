@@ -72,7 +72,7 @@ class HandlerTest extends TestCase
         $message = $this->getMessage();
         $transport = m::spy(\RabbitEvents\Listener\Support\Releaser::class);
 
-        $handler = new Handler($message, static fn($event, $payload) => $event, FailingListener::class, $transport, [$listener, 'failed']);
+        $handler = new Handler($message, static fn($event, $payload) => $event, FailingListener::class, $transport, static fn() => $listener);
 
         try {
             $handler->fail($exception);

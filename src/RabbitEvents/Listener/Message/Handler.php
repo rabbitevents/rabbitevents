@@ -31,14 +31,16 @@ class Handler
      */
     protected bool $failed = false;
 
+    private mixed $listener;
+
     public function __construct(
         public readonly Message $message,
-        private \Closure $listener,
+        callable $listener,
         protected string $listenerClass,
         private Releaser $releaser,
-        private mixed $failedCallback = null,
         private ?\Closure $listenerInstance = null
     ) {
+        $this->listener = is_object($listener) && !$listener instanceof \Closure ? clone $listener : $listener;
     }
 
     public function handle()
@@ -73,8 +75,8 @@ class Handler
         $this->markAsFailed();
         $this->message->markAsFailed($exception, $this->listenerClass);
 
-        if ($this->failedCallback && is_callable($this->failedCallback)) {
-            ($this->failedCallback)($this->payload(), $exception);
+        if (method_exists($listener = $this->listener(), 'failed')) {
+            $listener->failed($this->payload(), $exception);
         }
     }
 
@@ -202,12 +204,16 @@ class Handler
     }
 
     /**
-     * The listener instance that declares the retry policy. A listener that can't be built has none: its handling
-     * failed with the same exception, which is reported.
+     * The listener instance that declares the retry policy and failed(). A listener that can't be built has none:
+     * its handling failed with the same exception, which is reported.
      */
     private function listener(): object
     {
         try {
+            if (is_object($this->listener) && method_exists($this->listener, 'instance')) {
+                return $this->listener->instance();
+            }
+
             return ($this->listenerInstance ? ($this->listenerInstance)() : null) ?? new \stdClass();
         } catch (Throwable) {
             return new \stdClass();

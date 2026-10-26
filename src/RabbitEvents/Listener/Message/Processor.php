@@ -54,9 +54,8 @@ class Processor
                     continue;
                 }
 
-                [$callback, $instance] = $this->listenerForMessage($listener);
                 $response = $this->runHandler(
-                    $this->handlerFactory->make($message, $callback, $listenerId ?? \Closure::class, $instance),
+                    $this->handlerFactory->make($message, $listener, $listenerId ?? \Closure::class),
                     $options
                 );
 
@@ -118,10 +117,12 @@ class Processor
      */
     private function getListenerCallback(mixed $listener): array
     {
-        if ($listener instanceof \Closure) {
-            $wrapped = $this->wrappedListener($listener);
+        if (is_object($listener) && isset($listener->listener)) {
+            $listener = $listener->listener;
+        }
 
-            return $wrapped ? $this->getListenerCallback($wrapped['listener']) : [\Closure::class, null];
+        if ($listener instanceof \Closure) {
+            return [\Closure::class, null];
         }
 
         if (is_string($listener)) {
@@ -133,46 +134,6 @@ class Processor
         }
 
         return is_object($listener) ? [get_class($listener), '__invoke'] : [\Closure::class, null];
-    }
-
-    /**
-     * A class listener is built once per message, when it is first needed: its middleware, its handler, its retry
-     * policy and its failed() share the instance. An object listener is its own instance.
-     *
-     * @return array{callable, \Closure|null} The callback and the resolver of the listener instance (null for closures)
-     */
-    private function listenerForMessage(mixed $listener): array
-    {
-        if (!$listener instanceof \Closure || !$wrapped = $this->wrappedListener($listener)) {
-            return [$listener, null];
-        }
-
-        $instantiated = null;
-        $instantiate = function () use (&$instantiated, $wrapped) {
-            return $instantiated ??= $this->dispatcher->instantiateListener($wrapped['listener']);
-        };
-
-        return [
-            fn($event, $payload) => $this->dispatcher->makeListener($instantiate(), $wrapped['wildcard'])($event, $payload),
-            static fn(): object => is_array($instance = $instantiate()) ? $instance[0] : $instance,
-        ];
-    }
-
-    /**
-     * Dispatcher::makeListener() wraps a registered class or object listener into a closure.
-     *
-     * @return array{listener: mixed, wildcard: bool}|null The registered listener; null for a closure listener
-     */
-    private function wrappedListener(\Closure $listener): ?array
-    {
-        $function = new \ReflectionFunction($listener);
-        $used = $function->getStaticVariables();
-
-        if (!$function->getClosureThis() instanceof Dispatcher || !isset($used['listener']) || $used['listener'] instanceof \Closure) {
-            return null;
-        }
-
-        return ['listener' => $used['listener'], 'wildcard' => (bool) ($used['wildcard'] ?? false)];
     }
 
     /**

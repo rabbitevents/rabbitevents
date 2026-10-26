@@ -449,7 +449,7 @@ class FakeHandlerFactory extends HandlerFactory
     {
     }
 
-    public function make(Message $message, callable $callback, string $listenerClass, ?\Closure $instance = null): Handler
+    public function make(Message $message, callable $callback, string $listenerClass): Handler
     {
         if ($this->handler) {
             $this->handlers[] = $this->handler;

@@ -19,19 +19,17 @@ class HandlerFactory
 
     /**
      * @param string $listener The listener as Class@method (or \Closure::class), used in logs and x-listener
-     * @param \Closure|null $instance Gives the listener instance that handles the message (see Processor)
      */
-    public function make(Message $message, callable $callback, string $listener, ?\Closure $instance = null): Handler
+    public function make(Message $message, callable $callback, string $listener): Handler
     {
-        $instance ??= $this->lazyInstance(Str::before($listener, '@'));
-
         return new Handler(
             $message,
-            \Closure::fromCallable($callback),
+            $callback,
             $listener,
             $this->releaser,
-            $this->failedCallback(Str::before($listener, '@'), $instance),
-            $instance
+            is_object($callback) && method_exists($callback, 'instance')
+                ? null
+                : $this->lazyInstance(Str::before($listener, '@'))
         );
     }
 
@@ -49,23 +47,6 @@ class HandlerFactory
 
         return function () use ($class, &$instance): object {
             return $instance ??= $this->container->make($class);
-        };
-    }
-
-    /**
-     * The listener's failed() method, if it has one.
-     */
-    private function failedCallback(string $class, ?\Closure $instance): ?\Closure
-    {
-        // A container binding can only be checked by building it.
-        if (!$instance || (class_exists($class) && !method_exists($class, 'failed'))) {
-            return null;
-        }
-
-        return static function (...$arguments) use ($instance) {
-            if (method_exists($listener = $instance(), 'failed')) {
-                $listener->failed(...$arguments);
-            }
         };
     }
 }

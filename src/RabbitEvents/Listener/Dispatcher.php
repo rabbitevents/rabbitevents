@@ -101,29 +101,28 @@ class Dispatcher extends BaseDispatcher
     /**
      * @inheritdoc
      */
-    public function makeListener($listener, $wildcard = false): Closure
+    public function makeListener($listener, $wildcard = false): callable
     {
         // A closure is called as Handler calls it, with ($event, $payload), as in every released version.
         if ($listener instanceof Closure) {
             return $listener;
         }
 
-        return function ($event, $payload) use ($listener, $wildcard) {
-            $listener = $this->instantiateListener($listener);
+        $invoke = function (array $listener, $event, $payload) use ($wildcard) {
             $arguments = static::listenerArguments($payload);
-            $call = function (array $passed) use ($listener, $wildcard, $event, $payload, $arguments) {
+            $call = static function (array $passed) use ($listener, $wildcard, $event, $payload, $arguments) {
                 if (!$wildcard) {
-                    return parent::makeListener($listener)($event, $passed);
+                    return $listener(...array_values($passed));
                 }
 
                 // A wildcard listener gets ($event, $payload) like in Laravel and 9.x; if an onion middleware
                 // passed something else to $next, it gets that.
                 $passedPayload = $passed === $arguments ? $payload : static::payloadFromArguments($passed);
 
-                return parent::makeListener($listener, true)($event, $passedPayload);
+                return $listener($event, $passedPayload);
             };
 
-            if (empty($throughMiddleware = $this->extractMiddleware($listener))) {
+            if (empty($throughMiddleware = $this->extractMiddleware($listener[0]))) {
                 return $call($arguments);
             }
 
@@ -134,6 +133,42 @@ class Dispatcher extends BaseDispatcher
                     $throughMiddleware
                 ))
                 ->then($call);
+        };
+
+        // Cloned in Handler for every message, so its middleware, handle(), retry policy and failed() share one
+        // instance without leaking it across messages (wildcard listeners are cached by the parent dispatcher).
+        return new class ($this, $listener, $invoke) {
+            private ?array $instantiated = null;
+
+            public function __construct(
+                private Dispatcher $dispatcher,
+                public readonly mixed $listener,
+                private Closure $invoke
+            ) {
+            }
+
+            public function __invoke(mixed $event, mixed $payload): mixed
+            {
+                return ($this->invoke)($this->instantiate(), $event, $payload);
+            }
+
+            public function instance(): object
+            {
+                return $this->instantiate()[0];
+            }
+
+            public function __clone(): void
+            {
+                $this->instantiated = null;
+            }
+
+            /**
+             * @return array{object, string}
+             */
+            private function instantiate(): array
+            {
+                return $this->instantiated ??= $this->dispatcher->instantiateListener($this->listener);
+            }
         };
     }
 
@@ -249,55 +284,31 @@ class Dispatcher extends BaseDispatcher
     }
 
     /**
-     * Turns a class listener into [instance, method]: one instance per message, shared by the listener's
-     * middleware and its handler, and not kept in the container, so no state leaks into the next message.
+     * Turns a listener into [instance, method]: one instance per message for a class listener, shared by its
+     * middleware, its handler, its retry policy and its failed(), and not kept in the container, so no state
+     * leaks into the next message.
+     *
+     * @return array{object, string}
      */
-    public function instantiateListener(mixed $listener): mixed
+    public function instantiateListener(mixed $listener): array
     {
         if (is_string($listener)) {
             $listener = Str::parseCallback($listener, 'handle');
         }
 
-        if (!is_array($listener) || !is_string($listener[0])) {
-            return $listener;
+        if (is_object($listener)) {
+            return [$listener, '__invoke'];
         }
 
-        $instance = $this->container->make($listener[0]);
+        $instance = is_object($listener[0]) ? $listener[0] : $this->container->make($listener[0]);
         $method = $listener[1] ?? 'handle';
 
         return [$instance, method_exists($instance, $method) ? $method : '__invoke'];
     }
 
-    protected function makeListenerInstance($listener)
-    {
-        if (is_array($listener)) {
-            return is_object($listener[0]) ? $listener[0] : $this->makeListenerInstance($listener[0]);
-        }
-
-        if (is_string($listener)) {
-            [$class,] = Str::parseCallback($listener);
-
-            return $this->container->make($class);
-        }
-
-        if (is_object($listener)) {
-            return $listener;
-        }
-
-        return null;
-    }
-
-    /**
-     * @param $listener
-     * @return ?array
-     */
-    protected function extractMiddleware($listener): ?array
+    protected function extractMiddleware(object $instance): array
     {
         $result = [];
-
-        if (!$instance = $this->makeListenerInstance($listener)) {
-            return $result;
-        }
 
         if (isset($instance->middleware)) {
             foreach ((array) $instance->middleware as $middleware) {
