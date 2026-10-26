@@ -37,6 +37,7 @@ class RetryCommandTest extends FailedQueueTestCase
         self::assertCount(1, $producer->sent);
         self::assertEquals('test-service:', $producer->sent[0]['destination']->getName());
         self::assertEquals(0, $producer->sent[0]['message']->getProperty('x-attempts'));
+        self::assertNull($producer->sent[0]['message']->getProperty('x-listener-attempts'), 'Listeners get all their tries again');
         self::assertEquals('order.created', $producer->sent[0]['message']->getProperty('event'));
         self::assertEquals('order.created', $producer->sent[0]['message']->getRoutingKey());
         self::assertCount(1, $consumer->acknowledged);

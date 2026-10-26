@@ -19,38 +19,53 @@ class HandlerFactory
 
     /**
      * @param string $listener The listener as Class@method (or \Closure::class), used in logs and x-listener
+     * @param \Closure|null $instance Gives the listener instance that handles the message (see Processor)
      */
-    public function make(Message $message, callable $callback, string $listener): Handler
+    public function make(Message $message, callable $callback, string $listener, ?\Closure $instance = null): Handler
     {
+        $instance ??= $this->lazyInstance(Str::before($listener, '@'));
+
         return new Handler(
             $message,
             \Closure::fromCallable($callback),
             $listener,
             $this->releaser,
-            $this->failedCallback(Str::before($listener, '@'))
+            $this->failedCallback(Str::before($listener, '@'), $instance),
+            $instance
         );
     }
 
     /**
-     * The listener's failed() method, if it has one. Its instance is built only when a message fails.
+     * Without the instance that handles the message, builds the listener class once, when the handler needs its
+     * failed() or retry policy, and never keeps it in the container.
      */
-    private function failedCallback(string $class): ?\Closure
+    private function lazyInstance(string $class): ?\Closure
     {
-        if ($class === \Closure::class) {
+        if ($class === \Closure::class || (!class_exists($class) && !$this->container->bound($class))) {
             return null;
         }
 
-        if (class_exists($class)) {
-            return method_exists($class, 'failed')
-                ? fn(...$arguments) => $this->container->make($class)->failed(...$arguments)
-                : null;
+        $instance = null;
+
+        return function () use ($class, &$instance): object {
+            return $instance ??= $this->container->make($class);
+        };
+    }
+
+    /**
+     * The listener's failed() method, if it has one.
+     */
+    private function failedCallback(string $class, ?\Closure $instance): ?\Closure
+    {
+        // A container binding can only be checked by building it.
+        if (!$instance || (class_exists($class) && !method_exists($class, 'failed'))) {
+            return null;
         }
 
-        // A container binding: it can only be checked by building it, so build it once.
-        if ($this->container->bound($class) && method_exists($listener = $this->container->make($class), 'failed')) {
-            return $listener->failed(...);
-        }
-
-        return null;
+        return static function (...$arguments) use ($instance) {
+            if (method_exists($listener = $instance(), 'failed')) {
+                $listener->failed(...$arguments);
+            }
+        };
     }
 }

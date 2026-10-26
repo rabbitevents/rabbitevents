@@ -16,6 +16,7 @@ use RabbitEvents\Listener\Events\ListenerHandling;
 use RabbitEvents\Listener\Contracts\Deduplicator;
 use RabbitEvents\Listener\Deduplication\NullDeduplicator;
 use RabbitEvents\Listener\Exceptions\FailedException;
+use RabbitEvents\Listener\Exceptions\MaxAttemptsExceededException;
 use RabbitEvents\Listener\ListenerOptions;
 use Throwable;
 
@@ -53,8 +54,9 @@ class Processor
                     continue;
                 }
 
+                [$callback, $instance] = $this->listenerForMessage($listener);
                 $response = $this->runHandler(
-                    $this->handlerFactory->make($message, $listener, $listenerId ?? \Closure::class),
+                    $this->handlerFactory->make($message, $callback, $listenerId ?? \Closure::class, $instance),
                     $options
                 );
 
@@ -117,12 +119,9 @@ class Processor
     private function getListenerCallback(mixed $listener): array
     {
         if ($listener instanceof \Closure) {
-            // Dispatcher::makeListener() wraps the registered listener into a closure.
-            $used = (new \ReflectionFunction($listener))->getStaticVariables();
+            $wrapped = $this->wrappedListener($listener);
 
-            return isset($used['listener']) && !$used['listener'] instanceof \Closure
-                ? $this->getListenerCallback($used['listener'])
-                : [\Closure::class, null];
+            return $wrapped ? $this->getListenerCallback($wrapped['listener']) : [\Closure::class, null];
         }
 
         if (is_string($listener)) {
@@ -137,6 +136,46 @@ class Processor
     }
 
     /**
+     * A class listener is built once per message, when it is first needed: its middleware, its handler, its retry
+     * policy and its failed() share the instance. An object listener is its own instance.
+     *
+     * @return array{callable, \Closure|null} The callback and the resolver of the listener instance (null for closures)
+     */
+    private function listenerForMessage(mixed $listener): array
+    {
+        if (!$listener instanceof \Closure || !$wrapped = $this->wrappedListener($listener)) {
+            return [$listener, null];
+        }
+
+        $instantiated = null;
+        $instantiate = function () use (&$instantiated, $wrapped) {
+            return $instantiated ??= $this->dispatcher->instantiateListener($wrapped['listener']);
+        };
+
+        return [
+            fn($event, $payload) => $this->dispatcher->makeListener($instantiate(), $wrapped['wildcard'])($event, $payload),
+            static fn(): object => is_array($instance = $instantiate()) ? $instance[0] : $instance,
+        ];
+    }
+
+    /**
+     * Dispatcher::makeListener() wraps a registered class or object listener into a closure.
+     *
+     * @return array{listener: mixed, wildcard: bool}|null The registered listener; null for a closure listener
+     */
+    private function wrappedListener(\Closure $listener): ?array
+    {
+        $function = new \ReflectionFunction($listener);
+        $used = $function->getStaticVariables();
+
+        if (!$function->getClosureThis() instanceof Dispatcher || !isset($used['listener']) || $used['listener'] instanceof \Closure) {
+            return null;
+        }
+
+        return ['listener' => $used['listener'], 'wildcard' => (bool) ($used['wildcard'] ?? false)];
+    }
+
+    /**
      * Process concrete listener
      *
      * @param Handler $handler
@@ -145,6 +184,9 @@ class Processor
      */
     public function runHandler(Handler $handler, ListenerOptions $options)
     {
+        $this->failIfTriesUsedUp($handler, $options);
+        $handler->countAttempt();
+
         try {
             $this->raiseBeforeEvent($handler);
 
@@ -181,7 +223,7 @@ class Processor
             // attempts it is allowed to run the next time we process it. If so we will just
             // go ahead and mark it as failed now, so we do not have to release this again.
             if (!$handler->hasFailed()) {
-                $this->markAsFailedIfWillExceedMaxAttempts($handler, $options->maxTries, $exception);
+                $this->markAsFailedIfWillExceedMaxAttempts($handler, $this->tries($handler, $options), $exception);
             }
 
             $this->raiseExceptionOccurredEvent($handler, $exception);
@@ -190,11 +232,48 @@ class Processor
             // so it is not lost entirely. This'll let the job be retried at a later time by
             // another listener (or this same one). We will re-throw this exception after.
             if ($this->couldBeReleased($handler)) {
-                $handler->release($options->sleep);
+                $handler->release($handler->backoff() ?? $options->sleep);
             }
         }
 
         throw $exception;
+    }
+
+    /**
+     * The listener comes back after it was attempted as many times as it may be (released by a worker with other
+     * `--tries`, or by a version of the listener with more `$tries`): fail the message without running it.
+     * A closure is never failed before it runs: its attempts are the deliveries of the message, which the retries
+     * of other listeners add to.
+     *
+     * @throws MaxAttemptsExceededException
+     */
+    protected function failIfTriesUsedUp(Handler $handler, ListenerOptions $options): void
+    {
+        // The first attempt needn't build the listener to ask for its tries.
+        if ($handler->isClosure() || $handler->attempts() === 0) {
+            return;
+        }
+
+        $tries = $this->tries($handler, $options);
+
+        if ($tries === 0 || $handler->attempts() < $tries) {
+            return;
+        }
+
+        $exception = new MaxAttemptsExceededException(
+            sprintf('%s has been attempted too many times.', $handler->getName())
+        );
+        $this->handleFail($handler, $exception);
+
+        throw $exception;
+    }
+
+    /**
+     * The listener's own tries, or `--tries`. 0 means unlimited.
+     */
+    protected function tries(Handler $handler, ListenerOptions $options): int
+    {
+        return $handler->tries() ?? $options->maxTries;
     }
 
     protected function couldBeReleased(Handler $handler)

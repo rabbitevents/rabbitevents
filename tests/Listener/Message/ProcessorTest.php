@@ -81,8 +81,6 @@ class ProcessorTest extends TestCase
 
     public function testProcessFail()
     {
-        $this->expectException(FailedException::class);
-
         $this->mockListeners([
             static function () {
                 throw new FailedException();
@@ -93,7 +91,7 @@ class ProcessorTest extends TestCase
 
         $processor = new Processor($handlerFactory, $this->events, $this->dispatcher);
 
-        $processor->process($this->message, $this->options());
+        self::assertInstanceOf(FailedException::class, $this->catch(fn() => $processor->process($this->message, $this->options())));
 
         $handler = $handlerFactory->handlers[0];
 
@@ -103,13 +101,12 @@ class ProcessorTest extends TestCase
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandling::class))->once();
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandlerExceptionOccurred::class))->once();
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandleFailed::class))->once();
-        $this->events->shouldNotHaveReceived()->dispatch(m::type(ListenerHandled::class))->once();
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(ListenerHandled::class)]);
     }
 
     public function testRegularExceptionThenRelease()
     {
         $exceptionMessage = 'Failed handler exception';
-        $this->expectExceptionMessage($exceptionMessage);
 
         $handler = new FakeHandler($this->message);
         $handler->callback = function () use ($exceptionMessage) {
@@ -118,26 +115,27 @@ class ProcessorTest extends TestCase
 
         $processor = new Processor(new FakeHandlerFactory(), $this->events, $this->dispatcher);
 
-        $processor->runHandler($handler, $this->options());
+        $exception = $this->catch(fn() => $processor->runHandler($handler, $this->options()));
 
-        self::assertTrue($handler->fired && $handler->failed && $handler->released);
+        self::assertSame($exceptionMessage, $exception?->getMessage());
+        self::assertTrue($handler->fired && $handler->released);
+        self::assertFalse($handler->failed);
 
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandling::class))->once();
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandlerExceptionOccurred::class))->once();
-        $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandled::class))->once();
-        $this->events->shouldNotHaveReceived()->dispatch(m::type(ListenerHandleFailed::class))->once();
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(ListenerHandled::class)]);
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(ListenerHandleFailed::class)]);
     }
 
     public function testDonNotReleaseIfLastAttempt()
     {
-        $this->expectException(\RuntimeException::class);
-
         $handler = new FakeHandler($this->message);
         $handler->callback = function () {
             throw new \RuntimeException();
         };
 
-        $handler->attempts = 3;
+        // This attempt is the third
+        $handler->attempts = 2;
 
         $processor = new Processor(new FakeHandlerFactory(), $this->events, $this->dispatcher);
 
@@ -148,15 +146,27 @@ class ProcessorTest extends TestCase
             maxTries: 3
         );
 
-        $processor->runHandler($handler, $options);
+        self::assertInstanceOf(\RuntimeException::class, $this->catch(fn() => $processor->runHandler($handler, $options)));
 
+        self::assertTrue($handler->fired);
         self::assertTrue($handler->hasFailed());
         self::assertFalse($handler->isReleased());
 
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandling::class))->once();
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandlerExceptionOccurred::class))->once();
-        $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandled::class))->once();
         $this->events->shouldHaveReceived()->dispatch(m::type(ListenerHandleFailed::class))->once();
+        $this->events->shouldNotHaveReceived('dispatch', [m::type(ListenerHandled::class)]);
+    }
+
+    private function catch(callable $callback): ?\Throwable
+    {
+        try {
+            $callback();
+        } catch (\Throwable $exception) {
+            return $exception;
+        }
+
+        return null;
     }
 
     protected function options(array $overrides = [])
@@ -439,7 +449,7 @@ class FakeHandlerFactory extends HandlerFactory
     {
     }
 
-    public function make(Message $message, callable $callback, string $listenerClass): Handler
+    public function make(Message $message, callable $callback, string $listenerClass, ?\Closure $instance = null): Handler
     {
         if ($this->handler) {
             $this->handlers[] = $this->handler;
@@ -533,6 +543,11 @@ class FakeHandler extends Handler
     public function attempts(): int
     {
         return $this->attempts;
+    }
+
+    public function countAttempt(): void
+    {
+        $this->attempts++;
     }
 
     public function fail($e): void

@@ -12,6 +12,7 @@ use RabbitEvents\Foundation\Contracts\FailedDestination;
 use RabbitEvents\Foundation\Contracts\Producer;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Foundation\Support\Sender;
+use RabbitEvents\Listener\Message\Handler;
 use RabbitEvents\Listener\Support\Failer;
 
 class RetryCommand extends Command
@@ -110,6 +111,7 @@ class RetryCommand extends Command
         $message->setRoutingKey($routingKey);
         $message->setProperty('event', $routingKey);
         $message->setProperty('x-attempts', 0);
+        $message->setProperty(Handler::ATTEMPTS_PROPERTY, null);
 
         foreach (Failer::FAILURE_PROPERTIES as $property) {
             $message->setProperty($property, null);

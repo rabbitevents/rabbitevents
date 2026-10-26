@@ -111,16 +111,33 @@ class HandlerTest extends TestCase
         self::assertTrue($handler->isReleased());
     }
 
-    public function testGetAttempts()
+    public function testAttemptsAreCountedPerListener()
     {
-        $handler = new Handler(
-            $this->getMessage()->increaseAttempts(),
-            static fn($event, $payload) => $event,
-            $this->listenerClass,
-            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
-        );
+        $message = $this->getMessage()->increaseAttempts()->increaseAttempts();
+        $releaser = m::mock(\RabbitEvents\Listener\Support\Releaser::class);
+        $first = new Handler($message, static fn() => null, 'App\\First@handle', $releaser);
+        $second = new Handler($message, static fn() => null, 'App\\Second@handle', $releaser);
 
-        self::assertEquals(1, $handler->attempts());
+        self::assertSame(0, $first->attempts(), 'Deliveries of the message are not attempts of the listener');
+
+        $first->countAttempt();
+        $first->countAttempt();
+        $second->countAttempt();
+
+        self::assertSame(2, $first->attempts());
+        self::assertSame(1, $second->attempts());
+        self::assertSame([['App\\First@handle', 2], ['App\\Second@handle', 1]], $message->getProperty('x-listener-attempts'));
+    }
+
+    public function testClosureAttemptsAreDeliveriesOfTheMessage()
+    {
+        $message = $this->getMessage()->increaseAttempts()->increaseAttempts();
+        $handler = new Handler($message, static fn() => null, \Closure::class, m::mock(\RabbitEvents\Listener\Support\Releaser::class));
+
+        $handler->countAttempt();
+
+        self::assertSame(2, $handler->attempts());
+        self::assertNull($message->getProperty('x-listener-attempts'));
     }
 
     protected function getMessage(): Message

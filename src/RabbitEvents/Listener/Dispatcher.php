@@ -252,7 +252,7 @@ class Dispatcher extends BaseDispatcher
      * Turns a class listener into [instance, method]: one instance per message, shared by the listener's
      * middleware and its handler, and not kept in the container, so no state leaks into the next message.
      */
-    protected function instantiateListener(mixed $listener): mixed
+    public function instantiateListener(mixed $listener): mixed
     {
         if (is_string($listener)) {
             $listener = Str::parseCallback($listener, 'handle');

@@ -32,6 +32,7 @@ RabbitEvents helps you publish an event and handle it seamlessly in other applic
    * [Listening for Events](#quick-start-listener)
 1. [Reliability & Guarantees (Zero-DB Architecture)](#reliability)
    * [Message IDs & Observability](#message-ids)
+   * [Retries](#retries)
    * [Failed Messages](#failed-messages)
    * [Kill Switch](#kill-switch)
    * [Deduplication](#deduplication)
@@ -304,8 +305,26 @@ Listener worker console logs display the message ID and execution time in real-t
 [3fa85f64-5717-4562-b3fc-2c963f66afa6] [2026-10-20 12:00:00] Processed:  payment.processed:App\Listeners\HandlePayment@handle (14.22ms)
 ```
 
+### Retries<a name="retries"></a>
+A listener that throws is tried again after `--sleep` seconds, up to `--tries` times. A listener class can set its own limits, and each listener of a message counts its own tries:
+
+```php
+class SendInvoice
+{
+    public int $tries = 5;
+    public array $backoff = [1, 5, 30]; // seconds after the 1st, 2nd and every further failed try
+
+    public function handle(array $payload): void
+    {
+        // ...
+    }
+}
+```
+
+See the [Listener documentation](./src/RabbitEvents/Listener/README.md#retries) for details.
+
 ### Failed Messages<a name="failed-messages"></a>
-When a listener exhausts its tries (`--tries=3`), times out, or throws `FailedException`, RabbitEvents moves the message to the `{queue}.failed` queue instead of dropping it.
+When a listener exhausts its tries (`--tries=3` or its own `$tries`), times out, or throws `FailedException`, RabbitEvents moves the message to the `{queue}.failed` queue instead of dropping it.
 
 The failed message keeps its payload, `message_id` and `trace_context`, and gets the properties `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` and `x-listener`. Listeners that already succeeded are recorded in `x-succeeded-listeners` and skipped on retry.
 

@@ -344,31 +344,47 @@ class WorkerTest extends TestCase
         Carbon::setTestNow();
     }
 
-    public function testProcessNotStartedIfExceededMaxAttempts(): void
+    public function testMessageDeliveredMoreTimesThanWorkerTriesIsProcessed(): void
     {
-        $message = $this->createMessageMock();
-        $message->shouldReceive('attempts')
-            ->andReturn(3);
-        $message->shouldReceive('markAsFailed')->once();
-        $message->shouldReceive('hasFailed')->andReturn(true);
+        // Its listeners may allow more tries than --tries: the processor decides per listener.
+        $message = $this->createRealMessage();
+        $message->setProperty('x-attempts', 3);
 
         $consumer = m::mock(Consumer::class);
-        $consumer->shouldReceive()
-            ->nextMessage(1000)
-            ->andReturn($message);
-        $consumer->shouldReceive('reject')->with($message, false)->once();
+        $consumer->shouldReceive('nextMessage')->andReturn($message);
+        $consumer->shouldReceive('acknowledge')->once()->with($message);
 
         $processor = m::spy(Processor::class);
 
         $worker = new Worker($this->exceptionHandler, $this->events);
         $worker->shouldQuit = true; //one tick
+        $worker->work($processor, $consumer, $options = $this->createListenerOptions(['maxTries' => 2]));
 
-        $options = $this->createListenerOptions(['maxTries' => 2]);
+        $processor->shouldHaveReceived('process')->with($message, $options)->once();
+    }
 
-        $worker->work($processor, $consumer, $options);
+    public function testInterruptedMessageOnItsLastDeliveryIsFailedInsteadOfReleased(): void
+    {
+        $exception = new \RuntimeException('Deduplication store failed');
+        $message = $this->createRealMessage();
+        $message->setProperty('x-attempts', 2);
 
-        $processor->shouldNotHaveReceived('process');
+        $releaser = m::mock(Releaser::class);
+        $releaser->shouldNotReceive('release');
+        $failer = m::mock(\RabbitEvents\Foundation\Contracts\Transport::class);
+        $failer->shouldReceive('send')->once()->with($message);
 
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->andReturn($message);
+        $consumer->shouldReceive('acknowledge')->once()->with($message);
+
+        $worker = new Worker($this->exceptionHandler, $this->events);
+        $worker->setReleaser($releaser)->setFailer($failer);
+        $worker->shouldQuit = true;
+        $worker->work($this->processorThrowing($exception), $consumer, $this->createListenerOptions(['maxTries' => 2]));
+
+        self::assertTrue($message->hasFailed());
+        self::assertSame($exception, $message->failureException());
         $this->events->shouldHaveReceived()->dispatch(m::type(MessageProcessingFailed::class))->once();
     }
 

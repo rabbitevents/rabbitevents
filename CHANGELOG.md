@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Kill switch**: a worker stops consuming for `restart_timeout` seconds when at least `trip_threshold` percent of the messages it handled in the last `tracking_period` seconds failed (after `activation_threshold` messages), instead of moving the whole queue to `{queue}.failed` while a dependency is down. After the pause, a failing first message trips it again. Disabled by default (`rabbitevents.kill_switch.enabled`, `RABBITEVENTS_KILL_SWITCH_*`); the worker dispatches `KillSwitchTripped` and `KillSwitchRestarted`. Nothing changes on the wire.
+- **Retry policy per listener**: a listener class can set `$tries` / `tries()` and `$backoff` / `backoff()` (an int, or an array of delays per attempt whose last value repeats), overriding `--tries` and `--sleep` for it, as Laravel queued listeners do.
+
+### Changed behaviour
+- Tries are counted per listener in the new `x-listener-attempts` property (`[[Class@method, attempts], ...]`; 9.x ignores it). Before, all listeners of a message shared its delivery count, so a listener got fewer tries when another one had failed on the same message. Closures still count deliveries (`x-attempts`). `Handler::attempts()` (also in listener events and logs) returns the attempts of the listener.
+- The worker no longer fails a message delivered more than `--tries` times before running its listeners: each listener checks its own tries and is failed without running if it used them up. A message interrupted outside its listeners is moved to `{queue}.failed` on its `--tries`th delivery instead of being released once more.
+- `rabbitevents:retry` resets `x-listener-attempts` together with `x-attempts`.
+- `failed()` is called on the listener instance that handled the message, so it sees the state `handle()` left, instead of on a new instance.
+
+### Fixed
+- `failed()` of a `[$object, 'method']` or invokable object listener was called on a new instance of its class built by the container, which failed for a constructor with parameters the container can't resolve; the object itself is used now.
 
 ## [10.0.1]
 
