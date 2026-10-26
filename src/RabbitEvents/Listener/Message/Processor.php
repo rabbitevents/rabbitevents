@@ -18,6 +18,7 @@ use RabbitEvents\Listener\Deduplication\NullDeduplicator;
 use RabbitEvents\Listener\Exceptions\FailedException;
 use RabbitEvents\Listener\Exceptions\MaxAttemptsExceededException;
 use RabbitEvents\Listener\ListenerOptions;
+use RabbitEvents\Listener\RegisteredListener;
 use Throwable;
 
 class Processor
@@ -54,9 +55,12 @@ class Processor
                     continue;
                 }
 
-                [$callback, $instance] = $this->listenerForMessage($listener);
+                if ($listener instanceof RegisteredListener) {
+                    $listener = $listener->forMessage();
+                }
+
                 $response = $this->runHandler(
-                    $this->handlerFactory->make($message, $callback, $listenerId ?? \Closure::class, $instance),
+                    $this->handlerFactory->make($message, $listener, $listenerId ?? \Closure::class),
                     $options
                 );
 
@@ -103,76 +107,11 @@ class Processor
     }
 
     /**
-     * Identifies a listener in `x-succeeded-listeners` as Class@method, so that methods of one subscriber are
-     * tracked separately. It must be stable across processes. Closures can't be identified (null).
+     * The listener's Class@method (see RegisteredListener::id()). Closures can't be identified (null).
      */
     protected function getListenerId(mixed $listener): ?string
     {
-        [$class, $method] = $this->getListenerCallback($listener);
-
-        return $class === \Closure::class ? null : $class . '@' . ($method ?? 'handle');
-    }
-
-    /**
-     * @return array{string, string|null} The listener class (\Closure::class for closures) and method
-     */
-    private function getListenerCallback(mixed $listener): array
-    {
-        if ($listener instanceof \Closure) {
-            $wrapped = $this->wrappedListener($listener);
-
-            return $wrapped ? $this->getListenerCallback($wrapped['listener']) : [\Closure::class, null];
-        }
-
-        if (is_string($listener)) {
-            return \Illuminate\Support\Str::parseCallback($listener);
-        }
-
-        if (is_array($listener)) {
-            return [is_object($listener[0]) ? get_class($listener[0]) : $listener[0], $listener[1] ?? null];
-        }
-
-        return is_object($listener) ? [get_class($listener), '__invoke'] : [\Closure::class, null];
-    }
-
-    /**
-     * A class listener is built once per message, when it is first needed: its middleware, its handler, its retry
-     * policy and its failed() share the instance. An object listener is its own instance.
-     *
-     * @return array{callable, \Closure|null} The callback and the resolver of the listener instance (null for closures)
-     */
-    private function listenerForMessage(mixed $listener): array
-    {
-        if (!$listener instanceof \Closure || !$wrapped = $this->wrappedListener($listener)) {
-            return [$listener, null];
-        }
-
-        $instantiated = null;
-        $instantiate = function () use (&$instantiated, $wrapped) {
-            return $instantiated ??= $this->dispatcher->instantiateListener($wrapped['listener']);
-        };
-
-        return [
-            fn($event, $payload) => $this->dispatcher->makeListener($instantiate(), $wrapped['wildcard'])($event, $payload),
-            static fn(): object => is_array($instance = $instantiate()) ? $instance[0] : $instance,
-        ];
-    }
-
-    /**
-     * Dispatcher::makeListener() wraps a registered class or object listener into a closure.
-     *
-     * @return array{listener: mixed, wildcard: bool}|null The registered listener; null for a closure listener
-     */
-    private function wrappedListener(\Closure $listener): ?array
-    {
-        $function = new \ReflectionFunction($listener);
-        $used = $function->getStaticVariables();
-
-        if (!$function->getClosureThis() instanceof Dispatcher || !isset($used['listener']) || $used['listener'] instanceof \Closure) {
-            return null;
-        }
-
-        return ['listener' => $used['listener'], 'wildcard' => (bool) ($used['wildcard'] ?? false)];
+        return $listener instanceof RegisteredListener ? $listener->id() : null;
     }
 
     /**

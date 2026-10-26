@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RabbitEvents\Listener\Message;
 
 
+use RabbitEvents\Listener\RegisteredListener;
 use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Foundation\Message;
 use Throwable;
@@ -31,14 +32,22 @@ class Handler
      */
     protected bool $failed = false;
 
+    private \Closure $listener;
+
+    /**
+     * Gives the retry policy and failed(): the listener instance that handles the message (null for a closure).
+     */
+    private ?RegisteredListener $registeredListener;
+
     public function __construct(
         public readonly Message $message,
-        private \Closure $listener,
+        callable $listener,
         protected string $listenerClass,
         private Releaser $releaser,
-        private mixed $failedCallback = null,
-        private ?\Closure $listenerInstance = null
+        private mixed $failedCallback = null
     ) {
+        $this->listener = \Closure::fromCallable($listener);
+        $this->registeredListener = $listener instanceof RegisteredListener ? $listener : null;
     }
 
     public function handle()
@@ -73,8 +82,10 @@ class Handler
         $this->markAsFailed();
         $this->message->markAsFailed($exception, $this->listenerClass);
 
-        if ($this->failedCallback && is_callable($this->failedCallback)) {
+        if (is_callable($this->failedCallback)) {
             ($this->failedCallback)($this->payload(), $exception);
+        } elseif (method_exists($listener = $this->listener(), 'failed')) {
+            $listener->failed($this->payload(), $exception);
         }
     }
 
@@ -202,13 +213,13 @@ class Handler
     }
 
     /**
-     * The listener instance that declares the retry policy. A listener that can't be built has none: its handling
-     * failed with the same exception, which is reported.
+     * The listener instance that declares the retry policy and failed(). A listener that can't be built has none:
+     * its handling failed with the same exception, which is reported.
      */
     private function listener(): object
     {
         try {
-            return ($this->listenerInstance ? ($this->listenerInstance)() : null) ?? new \stdClass();
+            return $this->registeredListener?->instance() ?? new \stdClass();
         } catch (Throwable) {
             return new \stdClass();
         }

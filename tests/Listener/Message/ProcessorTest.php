@@ -39,7 +39,7 @@ class ProcessorTest extends TestCase
     {
         $this->mockListeners([
             static fn() => true,
-            new FakeHandler($this->message), // Using an invokable object to test class name resolution
+            new FakeHandler($this->message), // An invokable object
         ]);
 
         $processor = new Processor($handlerFactory = new FakeHandlerFactory(), $this->events, $this->dispatcher);
@@ -449,7 +449,7 @@ class FakeHandlerFactory extends HandlerFactory
     {
     }
 
-    public function make(Message $message, callable $callback, string $listenerClass, ?\Closure $instance = null): Handler
+    public function make(Message $message, callable $callback, string $listenerClass): Handler
     {
         if ($this->handler) {
             $this->handlers[] = $this->handler;
