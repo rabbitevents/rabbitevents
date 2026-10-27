@@ -306,7 +306,7 @@ Listener worker console logs display the message ID and execution time in real-t
 ```
 
 ### Retries<a name="retries"></a>
-A listener that throws is tried again after `--sleep` seconds, up to `--tries` times. A listener class can set its own limits, and each listener of a message counts its own tries:
+A listener that throws is tried again after `--sleep` seconds, up to `--tries` times. A listener class can set its own limits with properties, `tries()` / `backoff()` methods or `#[Tries]` / `#[Backoff]` attributes, as Laravel queued listeners do, and each listener of a message counts its own tries:
 
 ```php
 class SendInvoice

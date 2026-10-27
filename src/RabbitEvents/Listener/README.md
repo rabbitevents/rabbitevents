@@ -335,11 +335,31 @@ class SendInvoice
 }
 ```
 
-- `$tries` / `tries()` overrides `--tries` for this listener.
-- `$backoff` / `backoff()` overrides `--sleep`: an `int` is the delay before every retry; an array gives the delay after the first, second, ... attempt, and its last value applies to the rest (`[1, 5, 30]` waits 1s, 5s, then 30s for every further retry). An empty array falls back to `--sleep`.
+Or with attributes:
+
+```php
+use RabbitEvents\Listener\Attributes\Backoff;
+use RabbitEvents\Listener\Attributes\Tries;
+
+#[Tries(5)]
+#[Backoff(1, 5, 30)]
+class SendInvoice
+{
+    public function handle(array $payload): void
+    {
+        // ...
+    }
+}
+```
+
+- `$tries`, `tries()` or `#[Tries]` overrides `--tries` for this listener.
+- `$backoff`, `backoff()` or `#[Backoff]` overrides `--sleep`: an `int` is the delay before every retry; an array gives the delay after the first, second, ... attempt, and its last value applies to the rest (`[1, 5, 30]` waits 1s, 5s, then 30s for every further retry). An empty array falls back to `--sleep`.
+- Laravel's `Illuminate\Queue\Attributes\Tries` and `Backoff` work as well, when `illuminate/queue` provides them.
+- If a listener declares an option in several ways, as in Laravel, the method wins, then the attribute, then the property. A subclass that redeclares the property overrides the attribute of its parent.
+- As in Laravel, they are read from the class without calling its constructor, so no dependencies are resolved for them and a value set in the constructor is ignored. `tries()` and `backoff()` get the same arguments as the handler method. A `[$object, 'method']` or invokable object listener is read from that object.
 - Tries are counted **per listener**, in the `x-listener-attempts` property: if two listeners handle a message and the first one fails once, the second one still gets all its tries. Methods of one subscriber class share its `$tries`/`$backoff` but count their attempts separately.
 - Closures can't be identified across deliveries: they count the deliveries of the message (`x-attempts`), which include the retries of other listeners of the message, and use `--tries` and `--sleep`. A closure is never failed before it runs: when it throws on a delivery past `--tries`, the message fails.
-- The policy is read from the listener instance that handles the message (a `[$object, 'method']` or invokable object listener is its own instance), and `failed()` is called on it too.
+- `failed()` is called on the listener instance that handled the message, so it sees the state `handle()` left (Laravel calls it on a new instance).
 - Each distinct delay gets its own delay queue in RabbitMQ (created on first use). Transports that can't delay a delivery (Redis) retry right away.
 - To fail without retrying, throw `RabbitEvents\Listener\Exceptions\FailedException`.
 

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace RabbitEvents\Tests\Listener;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use RabbitEvents\Listener\Attributes\Backoff;
+use RabbitEvents\Listener\Attributes\Tries;
 use RabbitEvents\Listener\Dispatcher;
 use RabbitEvents\Listener\RegisteredListener;
 
@@ -83,16 +85,88 @@ class RegisteredListenerTest extends TestCase
             'backoff per attempt' => [PolicyPropertiesListenerStub::class, 2, 5, 20],
             'last backoff repeats' => [PolicyPropertiesListenerStub::class, 9, 5, 20],
             'empty backoff' => [EmptyBackoffListenerStub::class, 1, null, null],
-        ];
+            'attributes' => [AttributePolicyListenerStub::class, 1, 4, 2],
+            'attribute backoff per attempt' => [AttributePolicyListenerStub::class, 3, 4, 6],
+            'attribute backoff int' => [AttributeBackoffIntListenerStub::class, 1, null, 3],
+            'attributes of a parent' => [InheritsAttributesListenerStub::class, 1, 4, 2],
+            'attribute over the property of its class' => [AttributeAndPropertyListenerStub::class, 1, 4, 2],
+            'property of a subclass over the attribute of its parent' => [OverridesAttributeListenerStub::class, 1, 6, 9],
+            'method over attribute' => [AttributeAndMethodListenerStub::class, 1, 3, 7],
+        ] + self::withLaravelAttributes([
+            'Laravel attributes' => [LaravelAttributesListenerStub::class, 2, 4, 6],
+            'Laravel attribute backoff int' => [LaravelBackoffIntListenerStub::class, 1, null, 3],
+        ]);
+    }
+
+    /**
+     * Laravel's queue attributes exist only in the illuminate/queue versions that provide them.
+     */
+    private static function withLaravelAttributes(array $cases): array
+    {
+        return class_exists(\Illuminate\Queue\Attributes\Tries::class) ? $cases : [];
     }
 
     #[DataProvider('policies')]
-    public function testRetryPolicyIsReadFromTheInstance(string $class, int $attempts, ?int $tries, ?int $backoff): void
+    public function testRetryPolicyIsReadFromTheClass(string $class, int $attempts, ?int $tries, ?int $backoff): void
     {
         $listener = (new Dispatcher())->makeListener($class)->forMessage();
 
-        self::assertSame($tries, $listener->tries());
-        self::assertSame($backoff, $listener->backoff($attempts));
+        self::assertSame($tries, $listener->tries('order.created', ['id' => 1]));
+        self::assertSame($backoff, $listener->backoff('order.created', ['id' => 1], $attempts));
+    }
+
+    public function testRetryPolicyIsReadWithoutTheConstructor(): void
+    {
+        // As Laravel reads the options of a queued listener: no dependencies are resolved to read them, and the
+        // constructor can't change them.
+        $listener = (new Dispatcher())->makeListener(ConstructorPolicyListenerStub::class)->forMessage();
+
+        self::assertSame(2, $listener->tries('order.created', []));
+        self::assertSame(4, $listener->backoff('order.created', [], 1));
+        self::assertSame(0, ConstructorPolicyListenerStub::$instances);
+    }
+
+    public static function policyArguments(): array
+    {
+        return [
+            'associative payload' => ['order.created', ['id' => 1], [['id' => 1]]],
+            'list payload' => ['order.created', [1, 2], [1, 2]],
+            'wildcard' => ['order.*', ['id' => 1], ['order.created', ['id' => 1]]],
+        ];
+    }
+
+    #[DataProvider('policyArguments')]
+    public function testPolicyMethodsGetTheArgumentsOfTheHandler(string $listen, array $payload, array $expected): void
+    {
+        $dispatcher = new Dispatcher();
+        $dispatcher->listen($listen, ArgumentsPolicyListenerStub::class);
+        [$listener] = $dispatcher->getListeners('order.created');
+        $listener = $listener->forMessage();
+
+        ArgumentsPolicyListenerStub::$received = [];
+        $listener->tries('order.created', $payload);
+        $listener->backoff('order.created', $payload, 1);
+        $handled = $listener('order.created', $payload);
+
+        self::assertSame([$expected, $expected], ArgumentsPolicyListenerStub::$received);
+        self::assertSame($expected, $handled);
+    }
+
+    public function testPropertyOfAnObjectListenerSetAtRuntimeOverridesTheAttribute(): void
+    {
+        $object = new AttributeAndPropertyListenerStub();
+        $object->tries = 8;
+
+        self::assertSame(8, (new Dispatcher())->makeListener($object)->forMessage()->tries('e', []));
+        self::assertSame(2, (new Dispatcher())->makeListener($object)->forMessage()->backoff('e', [], 1));
+    }
+
+    public function testObjectListenerPolicyIsReadFromTheObject(): void
+    {
+        $object = new PolicyPropertiesListenerStub();
+        $object->tries = 8;
+
+        self::assertSame(8, (new Dispatcher())->makeListener([$object, 'handle'])->forMessage()->tries('e', []));
     }
 
     public function testFailedIsCalledOnTheInstance(): void
@@ -114,13 +188,13 @@ class RegisteredListenerTest extends TestCase
         self::assertSame(1, RegisteredListenerStub::$instances);
     }
 
-    public function testListenerThatCannotBeBuiltHasNoPolicy(): void
+    public function testListenerThatCannotBeBuiltKeepsItsPolicy(): void
     {
-        // Its handling failed with the build exception, which must reach the worker, not one from tries() or failed().
+        // Its handling failed with the build exception, which must reach the worker, not one from failed().
         $listener = (new Dispatcher())->makeListener(UnbuildableListenerStub::class)->forMessage();
 
-        self::assertNull($listener->tries());
-        self::assertNull($listener->backoff(1));
+        self::assertSame(2, $listener->tries('order.created', []));
+        self::assertSame(4, $listener->backoff('order.created', [], 1));
         $listener->failed([], new \RuntimeException('boom'));
 
         $this->expectException(\Illuminate\Contracts\Container\BindingResolutionException::class);
@@ -199,10 +273,125 @@ class EmptyBackoffListenerStub
 
 class UnbuildableListenerStub
 {
+    public int $tries = 2;
+
+    public int $backoff = 4;
+
     public function __construct(string $required)
     {
     }
 
+    public function handle(): void
+    {
+    }
+}
+
+class ConstructorPolicyListenerStub
+{
+    public static int $instances = 0;
+
+    public int $tries = 2;
+
+    public int $backoff = 4;
+
+    public function __construct()
+    {
+        self::$instances++;
+        $this->tries = 9;
+    }
+
+    public function handle(): void
+    {
+    }
+}
+
+class ArgumentsPolicyListenerStub
+{
+    public static array $received = [];
+
+    public function handle(mixed ...$arguments): array
+    {
+        return $arguments;
+    }
+
+    public function tries(mixed ...$arguments): int
+    {
+        self::$received[] = $arguments;
+
+        return 1;
+    }
+
+    public function backoff(mixed ...$arguments): int
+    {
+        self::$received[] = $arguments;
+
+        return 1;
+    }
+}
+
+#[Tries(4)]
+#[Backoff(2, 4, 6)]
+class AttributePolicyListenerStub
+{
+    public function handle(): void
+    {
+    }
+}
+
+#[Backoff(3)]
+class AttributeBackoffIntListenerStub
+{
+    public function handle(): void
+    {
+    }
+}
+
+class InheritsAttributesListenerStub extends AttributePolicyListenerStub
+{
+}
+
+#[Tries(4)]
+#[Backoff(2)]
+class AttributeAndPropertyListenerStub
+{
+    public int $tries = 6;
+
+    public int $backoff = 9;
+
+    public function handle(): void
+    {
+    }
+
+    public function __invoke(): void
+    {
+    }
+}
+
+class OverridesAttributeListenerStub extends AttributePolicyListenerStub
+{
+    public int $tries = 6;
+
+    public int $backoff = 9;
+}
+
+#[Tries(4)]
+#[Backoff(2)]
+class AttributeAndMethodListenerStub extends PolicyMethodsListenerStub
+{
+}
+
+#[\Illuminate\Queue\Attributes\Tries(4)]
+#[\Illuminate\Queue\Attributes\Backoff(2, 6)]
+class LaravelAttributesListenerStub
+{
+    public function handle(): void
+    {
+    }
+}
+
+#[\Illuminate\Queue\Attributes\Backoff(3)]
+class LaravelBackoffIntListenerStub
+{
     public function handle(): void
     {
     }

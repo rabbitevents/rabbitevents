@@ -13,6 +13,7 @@ This folder contains practical reference implementations and boilerplate classes
 * **[IdempotentPaymentListener.php](./IdempotentPaymentListener.php)** - Idempotent processing guarded by a business key, with distributed trace ID extraction.
 * **[WildcardListener.php](./WildcardListener.php)** - Catch-all and wildcard event handler with matching logic and conditional propagation.
 * **[Listener.php](./Listener.php)** - Standard listener with middleware stack attached.
+* **[RetryPolicyListener.php](./RetryPolicyListener.php)** - Listener's own retry policy with `#[Tries]` and `#[Backoff]` attributes, overriding `--tries` and `--sleep`.
 
 ## Configuration & Providers
 * **[RabbitEventsServiceProvider.php](./RabbitEventsServiceProvider.php)** - Example of explicit listener registration via `$listen` array.

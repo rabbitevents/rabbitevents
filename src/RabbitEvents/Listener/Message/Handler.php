@@ -52,10 +52,7 @@ class Handler
 
     public function handle()
     {
-        $payload = $this->payload();
-
-        // Like Arr::wrap(), but null stays a value: Arr::wrap(null) is [], which would call the listener without it.
-        return ($this->listener)($this->message->event, is_array($payload) ? $payload : [$payload]);
+        return ($this->listener)($this->message->event, $this->listenerPayload());
     }
 
     public function payload(): mixed
@@ -173,7 +170,7 @@ class Handler
      */
     public function tries(): ?int
     {
-        return $this->registeredListener?->tries();
+        return $this->registeredListener?->tries($this->message->event, $this->listenerPayload());
     }
 
     /**
@@ -182,7 +179,18 @@ class Handler
      */
     public function backoff(): ?int
     {
-        return $this->registeredListener?->backoff($this->attempts());
+        return $this->registeredListener?->backoff($this->message->event, $this->listenerPayload(), $this->attempts());
+    }
+
+    /**
+     * The payload the listener is called with. Like Arr::wrap(), but null stays a value: Arr::wrap(null) is [],
+     * which would call the listener without it.
+     */
+    private function listenerPayload(): array
+    {
+        $payload = $this->payload();
+
+        return is_array($payload) ? $payload : [$payload];
     }
 
     /**

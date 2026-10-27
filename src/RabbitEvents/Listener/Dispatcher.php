@@ -149,6 +149,15 @@ class Dispatcher extends BaseDispatcher
     }
 
     /**
+     * The arguments a listener's handler is called with (see callListener()). Its tries() and backoff() get the same,
+     * as in Laravel.
+     */
+    public function handlerArguments(bool $wildcard, string $event, mixed $payload): array
+    {
+        return $wildcard ? [$event, $payload] : static::listenerArguments($payload);
+    }
+
+    /**
      * A non-empty list payload is the list of the listener's arguments (publish() wraps a payload into one);
      * any other payload (an associative or empty array, a scalar, null, an object) is the only argument.
      */

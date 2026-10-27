@@ -6,6 +6,8 @@ namespace RabbitEvents\Listener;
 
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Str;
+use RabbitEvents\Listener\Attributes\Backoff;
+use RabbitEvents\Listener\Attributes\Tries;
 use Throwable;
 
 /**
@@ -17,6 +19,14 @@ use Throwable;
  */
 final class RegisteredListener
 {
+    /**
+     * The attributes of each retry option: ours, and Laravel's (illuminate/queue) for listeners written the Laravel way.
+     */
+    private const ATTRIBUTES = [
+        'tries' => [Tries::class, 'Illuminate\\Queue\\Attributes\\Tries'],
+        'backoff' => [Backoff::class, 'Illuminate\\Queue\\Attributes\\Backoff'],
+    ];
+
     /**
      * The listener's class, or the object registered as the listener.
      */
@@ -60,7 +70,7 @@ final class RegisteredListener
     }
 
     /**
-     * The listener object: built by the container for a class listener and not kept in it, so no state leaks into
+     * The listener object that handles the message: built by the container for a class listener and not kept in it, so no state leaks into
      * the next message; the registered object otherwise.
      */
     public function instance(): object
@@ -88,28 +98,22 @@ final class RegisteredListener
     }
 
     /**
-     * The listener's `tries()` or `$tries`; null if it declares none (`--tries` applies).
+     * The listener's `tries()`, `#[Tries]` or `$tries`; null if it declares none (`--tries` applies).
      */
-    public function tries(): ?int
+    public function tries(string $event, mixed $payload): ?int
     {
-        $listener = $this->policyHolder();
+        $tries = $this->option('tries', $event, $payload);
 
-        if (method_exists($listener, 'tries')) {
-            return (int) $listener->tries();
-        }
-
-        return isset($listener->tries) ? (int) $listener->tries : null;
+        return is_null($tries) ? null : (int) $tries;
     }
 
     /**
-     * Seconds before the next try, from the listener's `backoff()` or `$backoff`; null if it declares none
-     * (`--sleep` applies). An array gives the delay after each attempt, its last value applies to the rest.
+     * Seconds before the next try, from the listener's `backoff()`, `#[Backoff]` or `$backoff`; null if it declares
+     * none (`--sleep` applies). An array gives the delay after each attempt, its last value applies to the rest.
      */
-    public function backoff(int $attempts): ?int
+    public function backoff(string $event, mixed $payload, int $attempts): ?int
     {
-        $listener = $this->policyHolder();
-
-        $backoff = method_exists($listener, 'backoff') ? $listener->backoff() : ($listener->backoff ?? null);
+        $backoff = $this->option('backoff', $event, $payload);
 
         if (is_array($backoff)) {
             $backoff = array_values($backoff);
@@ -120,13 +124,58 @@ final class RegisteredListener
         return is_null($backoff) ? null : (int) $backoff;
     }
 
+    /**
+     * Called on the instance that handled the message, so it sees the state handle() left. A listener that can't be
+     * built has none: its handling failed with the same exception, which is reported.
+     */
     public function failed(mixed $payload, Throwable $exception): void
     {
-        $listener = $this->policyHolder();
+        try {
+            $listener = $this->instance();
+        } catch (Throwable) {
+            return;
+        }
 
         if (method_exists($listener, 'failed')) {
             $listener->failed($payload, $exception);
         }
+    }
+
+    /**
+     * A retry option, in Laravel's order: the method (with the handler's arguments); the property, if an object
+     * listener changed it; the attribute of the class or of a parent, unless a subclass redeclares the property;
+     * the property.
+     */
+    private function option(string $name, string $event, mixed $payload): mixed
+    {
+        $listener = $this->policy();
+
+        if (method_exists($listener, $name)) {
+            return $listener->$name(...$this->dispatcher->handlerArguments($this->wildcard, $event, $payload));
+        }
+
+        $class = new \ReflectionClass($listener);
+        $value = $listener->$name ?? null;
+
+        if ($value !== ($class->getDefaultProperties()[$name] ?? null)) {
+            return $value;
+        }
+
+        for ($declaring = $class; $declaring !== false; $declaring = $declaring->getParentClass()) {
+            foreach (self::ATTRIBUTES[$name] as $attribute) {
+                // Laravel's attributes exist only where illuminate/queue provides them; the listener doesn't require it.
+                if (!class_exists($attribute) || !($attributes = $declaring->getAttributes($attribute))) {
+                    continue;
+                }
+
+                $redeclared = $value !== null
+                    && $class->getProperty($name)->getDeclaringClass()->isSubclassOf($declaring->getName());
+
+                return $redeclared ? $value : $attributes[0]->newInstance()->$name;
+            }
+        }
+
+        return $value;
     }
 
     /**
@@ -144,13 +193,18 @@ final class RegisteredListener
     }
 
     /**
-     * The instance that declares the retry policy and failed(). A listener that can't be built has none: its
-     * handling failed with the same exception, which is reported.
+     * The object the retry policy is read from. As Laravel reads the options of a queued listener, a class listener is
+     * created without its constructor: no dependencies are resolved, and a listener that can't be built keeps its
+     * policy. An object listener is read itself. A class that can't be created at all (missing, abstract) has none.
      */
-    private function policyHolder(): object
+    private function policy(): object
     {
+        if (is_object($this->target)) {
+            return $this->target;
+        }
+
         try {
-            return $this->instance();
+            return (new \ReflectionClass($this->target))->newInstanceWithoutConstructor();
         } catch (Throwable) {
             return new \stdClass();
         }

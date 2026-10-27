@@ -8,6 +8,8 @@ use Illuminate\Container\Container;
 use Illuminate\Events\Dispatcher as EventsDispatcher;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RabbitEvents\Foundation\Message;
+use RabbitEvents\Listener\Attributes\Backoff;
+use RabbitEvents\Listener\Attributes\Tries;
 use RabbitEvents\Listener\Dispatcher;
 use RabbitEvents\Listener\Exceptions\FailedException;
 use RabbitEvents\Listener\Exceptions\MaxAttemptsExceededException;
@@ -52,12 +54,13 @@ class RetryPolicyTest extends TestCase
         return [
             'class, $tries' => ['order.created', TriesProperty::class],
             'class, tries()' => ['order.created', TriesMethod::class],
+            'class, #[Tries]' => ['order.created', TriesAttribute::class],
             'Class@method' => ['order.created', TriesProperty::class . '@other'],
             '[Class, method]' => ['order.created', [TriesProperty::class, 'other']],
             '[$object, method]' => ['order.created', [new TriesProperty(), 'other']],
             'invokable object' => ['order.created', new InvokableTriesProperty()],
             'wildcard listener' => ['order.*', WildcardTriesProperty::class],
-        ];
+        ] + self::withLaravelAttributes(['class, Laravel #[Tries]' => ['order.created', LaravelTriesAttribute::class]]);
     }
 
     #[DataProvider('listenersWithFiveTries')]
@@ -111,8 +114,18 @@ class RetryPolicyTest extends TestCase
             '$backoff array, the last value repeats' => [BackoffArray::class, [1, 5, 5]],
             'backoff() method' => [BackoffMethod::class, [2, 4, 8]],
             'backoff() returning an int' => [BackoffMethodInt::class, [6, 6, 6]],
+            '#[Backoff] list, the last value repeats' => [BackoffAttribute::class, [2, 7, 7]],
+            '#[Backoff] int' => [BackoffAttributeInt::class, [4, 4, 4]],
             'empty $backoff array uses --sleep' => [BackoffEmpty::class, [3, 3, 3]],
-        ];
+        ] + self::withLaravelAttributes(['Laravel #[Backoff]' => [LaravelBackoffAttribute::class, [2, 7, 7]]]);
+    }
+
+    /**
+     * Laravel's queue attributes exist only in the illuminate/queue versions that provide them.
+     */
+    private static function withLaravelAttributes(array $cases): array
+    {
+        return class_exists(\Illuminate\Queue\Attributes\Tries::class) ? $cases : [];
     }
 
     #[DataProvider('backoffs')]
@@ -331,6 +344,38 @@ class RetryPolicyTest extends TestCase
 
         self::assertTrue($message->hasFailed());
         self::assertSame([], $this->producer->sent);
+    }
+
+    public static function payloadsAndEvents(): array
+    {
+        $cases = [];
+        foreach (['associative' => ['id' => 1], 'list' => [1, 2], 'empty' => [], 'scalar' => 'x', 'null' => null] as $name => $payload) {
+            $cases["$name, regular"] = ['order.created', $payload];
+            $cases["$name, wildcard"] = ['order.*', $payload];
+        }
+
+        return $cases;
+    }
+
+    /**
+     * As in Laravel, tries() and backoff() get the arguments of the handler.
+     */
+    #[DataProvider('payloadsAndEvents')]
+    public function testPolicyMethodsGetTheArgumentsOfTheHandler(string $listen, mixed $payload): void
+    {
+        RecordsPolicyArguments::$received = [];
+        $this->dispatcher->listen($listen, RecordsPolicyArguments::class);
+        $message = new Message('order.created', new Payload($payload), ['message_id' => 'msg-1']);
+
+        $this->deliver($message, $this->options(maxTries: 3));
+        $this->deliver($message, $this->options(maxTries: 3));
+
+        // Each attempt: tries before it (from the second one), handle, then tries and backoff after the exception.
+        self::assertSame(
+            ['handle', 'tries', 'backoff', 'tries', 'handle', 'tries', 'backoff'],
+            array_column(RecordsPolicyArguments::$received, 0)
+        );
+        self::assertCount(1, array_unique(array_map('serialize', array_column(RecordsPolicyArguments::$received, 1))));
     }
 
     private function deliver(Message $message, ListenerOptions $options): ?\Throwable
@@ -593,4 +638,63 @@ class CannotBeBuilt
     public function failed(array $payload, \Throwable $exception): void
     {
     }
+}
+
+class RecordsPolicyArguments
+{
+    public static array $received = [];
+
+    public function handle(mixed ...$arguments): void
+    {
+        self::$received[] = ['handle', $arguments];
+
+        throw new \RuntimeException('boom');
+    }
+
+    public function tries(mixed ...$arguments): int
+    {
+        self::$received[] = ['tries', $arguments];
+
+        return 5;
+    }
+
+    public function backoff(mixed ...$arguments): int
+    {
+        self::$received[] = ['backoff', $arguments];
+
+        return 0;
+    }
+}
+
+#[Tries(5)]
+class TriesAttribute
+{
+    public function handle(array $payload): void
+    {
+        RetryListenerCalls::fail(static::class);
+    }
+}
+
+#[Backoff(2, 7)]
+class BackoffAttribute extends NoPolicy
+{
+}
+
+#[Backoff(4)]
+class BackoffAttributeInt extends NoPolicy
+{
+}
+
+#[\Illuminate\Queue\Attributes\Tries(5)]
+class LaravelTriesAttribute
+{
+    public function handle(array $payload): void
+    {
+        RetryListenerCalls::fail(static::class);
+    }
+}
+
+#[\Illuminate\Queue\Attributes\Backoff(2, 7)]
+class LaravelBackoffAttribute extends NoPolicy
+{
 }
