@@ -13,7 +13,7 @@ All notable changes to this project will be documented in this file.
 - The worker no longer fails a message delivered more than `--tries` times before running its listeners: each listener checks its own tries and is failed without running if it used them up. A message interrupted outside its listeners is moved to `{queue}.failed` on its `--tries`th delivery instead of being released once more.
 - `rabbitevents:retry` resets `x-listener-attempts` together with `x-attempts`.
 - `failed()` is called on the listener instance that handled the message, so it sees the state `handle()` left, instead of on a new instance.
-- `Dispatcher::makeListener()` returns a callable `RegisteredListener` for class and object listeners instead of a `Closure` (closures are still returned as they are); `Handler` accepts any callable.
+- `Dispatcher::makeListener()` returns a callable `RegisteredListener` for class and object listeners instead of a `Closure` (closures are still returned as they are); `Handler` accepts any callable. `RegisteredListener` builds the listener and reads its retry policy, `failed()` and middleware; the protected `Dispatcher` methods `instantiateListener()`, `makeListenerInstance()` and `extractMiddleware()` are removed.
 
 ### Fixed
 - `failed()` of a `[$object, 'method']` or invokable object listener was called on a new instance of its class built by the container, which failed for a constructor with parameters the container can't resolve; the object itself is used now.

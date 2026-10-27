@@ -35,7 +35,7 @@ class Handler
     private \Closure $listener;
 
     /**
-     * Gives the retry policy and failed(): the listener instance that handles the message (null for a closure).
+     * Gives the retry policy and failed() of the listener (null for a closure).
      */
     private ?RegisteredListener $registeredListener;
 
@@ -84,8 +84,8 @@ class Handler
 
         if (is_callable($this->failedCallback)) {
             ($this->failedCallback)($this->payload(), $exception);
-        } elseif (method_exists($listener = $this->listener(), 'failed')) {
-            $listener->failed($this->payload(), $exception);
+        } else {
+            $this->registeredListener?->failed($this->payload(), $exception);
         }
     }
 
@@ -173,13 +173,7 @@ class Handler
      */
     public function tries(): ?int
     {
-        $listener = $this->listener();
-
-        if (method_exists($listener, 'tries')) {
-            return (int) $listener->tries();
-        }
-
-        return isset($listener->tries) ? (int) $listener->tries : null;
+        return $this->registeredListener?->tries();
     }
 
     /**
@@ -188,17 +182,7 @@ class Handler
      */
     public function backoff(): ?int
     {
-        $listener = $this->listener();
-
-        $backoff = method_exists($listener, 'backoff') ? $listener->backoff() : ($listener->backoff ?? null);
-
-        if (is_array($backoff)) {
-            $backoff = array_values($backoff);
-
-            return $backoff === [] ? null : (int) ($backoff[$this->attempts() - 1] ?? end($backoff));
-        }
-
-        return is_null($backoff) ? null : (int) $backoff;
+        return $this->registeredListener?->backoff($this->attempts());
     }
 
     /**
@@ -210,18 +194,5 @@ class Handler
             (array) $this->message->getProperty(self::ATTEMPTS_PROPERTY, []),
             static fn($entry) => is_array($entry) && is_string($entry[0] ?? null)
         ));
-    }
-
-    /**
-     * The listener instance that declares the retry policy and failed(). A listener that can't be built has none:
-     * its handling failed with the same exception, which is reported.
-     */
-    private function listener(): object
-    {
-        try {
-            return $this->registeredListener?->instance() ?? new \stdClass();
-        } catch (Throwable) {
-            return new \stdClass();
-        }
     }
 }

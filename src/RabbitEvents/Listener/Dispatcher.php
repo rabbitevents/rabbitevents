@@ -10,7 +10,6 @@ use Illuminate\Contracts\Container\Container as ContainerContract;
 use Illuminate\Events\Dispatcher as BaseDispatcher;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
 
 class Dispatcher extends BaseDispatcher
 {
@@ -108,15 +107,16 @@ class Dispatcher extends BaseDispatcher
             return $listener;
         }
 
-        return new RegisteredListener($this, $listener, (bool) $wildcard);
+        return new RegisteredListener($this, $this->container, $listener, (bool) $wildcard);
     }
 
     /**
-     * Calls a listener built by instantiateListener() through its middleware.
+     * Calls a listener instance through its middleware (see RegisteredListener).
      *
      * @param array{object, string} $listener
+     * @param array $middleware the listener's middleware definitions
      */
-    public function callListener(array $listener, bool $wildcard, string $event, mixed $payload): mixed
+    public function callListener(array $listener, array $middleware, bool $wildcard, string $event, mixed $payload): mixed
     {
         $arguments = static::listenerArguments($payload);
         $call = function (array $passed) use ($listener, $wildcard, $event, $payload, $arguments) {
@@ -131,15 +131,19 @@ class Dispatcher extends BaseDispatcher
             return parent::makeListener($listener, true)($event, $passedPayload);
         };
 
-        if (empty($throughMiddleware = $this->extractMiddleware($listener[0]))) {
+        if ($middleware === []) {
             return $call($arguments);
         }
 
         return (new Pipeline($this->container))
             ->send($arguments)
             ->through(array_map(
-                fn ($middleware) => $this->wrapMiddlewareIntoPipelineStage($middleware, $event, $wildcard),
-                $throughMiddleware
+                fn ($middleware) => $this->wrapMiddlewareIntoPipelineStage(
+                    $this->createMiddlewareCallable($middleware),
+                    $event,
+                    $wildcard
+                ),
+                $middleware
             ))
             ->then($call);
     }
@@ -253,49 +257,6 @@ class Dispatcher extends BaseDispatcher
         }
 
         return static::$middlewareExpectsNextCache[$key] = $expectsNext;
-    }
-
-    /**
-     * Turns a listener into [instance, method]. A class is built by the container and not kept in it, so no state
-     * leaks into the next message (see RegisteredListener); an object listener is its own instance.
-     *
-     * @return array{object, string}
-     */
-    public function instantiateListener(mixed $listener): array
-    {
-        if (is_object($listener)) {
-            return [$listener, '__invoke'];
-        }
-
-        if (is_string($listener)) {
-            $listener = Str::parseCallback($listener, 'handle');
-        }
-
-        if (is_object($listener[0])) {
-            return [$listener[0], $listener[1] ?? 'handle'];
-        }
-
-        $instance = $this->container->make($listener[0]);
-        $method = $listener[1] ?? 'handle';
-
-        return [$instance, method_exists($instance, $method) ? $method : '__invoke'];
-    }
-
-    protected function extractMiddleware(object $instance): array
-    {
-        $result = [];
-
-        if (isset($instance->middleware)) {
-            foreach ((array) $instance->middleware as $middleware) {
-                $result[] = $this->createMiddlewareCallable($middleware);
-            }
-        }
-
-        if (method_exists($instance, 'middleware')) {
-            $result[] = [$instance, 'middleware'];
-        }
-
-        return $result;
     }
 
     protected function createMiddlewareCallable($mixed): callable
