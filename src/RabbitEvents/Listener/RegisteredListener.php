@@ -143,8 +143,8 @@ final class RegisteredListener
 
     /**
      * A retry option, in Laravel's order: the method (with the handler's arguments); the property, if an object
-     * listener changed it; the attribute of the class or of a parent, unless a subclass redeclares the property;
-     * the property.
+     * listener changed it; the attribute of the class, of a trait it uses or of a parent, unless a subclass
+     * redeclares the property; the property.
      */
     private function option(string $name, string $event, mixed $payload): mixed
     {
@@ -162,16 +162,18 @@ final class RegisteredListener
         }
 
         for ($declaring = $class; $declaring !== false; $declaring = $declaring->getParentClass()) {
-            foreach (self::ATTRIBUTES[$name] as $attribute) {
-                // Laravel's attributes exist only where illuminate/queue provides them; the listener doesn't require it.
-                if (!class_exists($attribute) || !($attributes = $declaring->getAttributes($attribute))) {
-                    continue;
+            foreach ([$declaring, ...$declaring->getTraits()] as $source) {
+                foreach (self::ATTRIBUTES[$name] as $attribute) {
+                    // Laravel's attributes exist only where illuminate/queue provides them; the listener doesn't require it.
+                    if (!class_exists($attribute) || !($attributes = $source->getAttributes($attribute))) {
+                        continue;
+                    }
+
+                    $redeclared = $value !== null
+                        && $class->getProperty($name)->getDeclaringClass()->isSubclassOf($declaring->getName());
+
+                    return $redeclared ? $value : $attributes[0]->newInstance()->$name;
                 }
-
-                $redeclared = $value !== null
-                    && $class->getProperty($name)->getDeclaringClass()->isSubclassOf($declaring->getName());
-
-                return $redeclared ? $value : $attributes[0]->newInstance()->$name;
             }
         }
 

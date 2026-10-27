@@ -2,7 +2,6 @@
 
 namespace RabbitEvents\Tests\Listener\Message;
 
-
 use Mockery as m;
 use RabbitEvents\Foundation\Contracts\Transport;
 use RabbitEvents\Foundation\Message;

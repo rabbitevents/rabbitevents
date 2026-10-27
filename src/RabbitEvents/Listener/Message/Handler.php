@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace RabbitEvents\Listener\Message;
 
-
 use RabbitEvents\Listener\RegisteredListener;
 use RabbitEvents\Listener\Support\Releaser;
 use RabbitEvents\Foundation\Message;

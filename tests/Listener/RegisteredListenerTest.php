@@ -89,6 +89,8 @@ class RegisteredListenerTest extends TestCase
             'attribute backoff per attempt' => [AttributePolicyListenerStub::class, 3, 4, 6],
             'attribute backoff int' => [AttributeBackoffIntListenerStub::class, 1, null, 3],
             'attributes of a parent' => [InheritsAttributesListenerStub::class, 1, 4, 2],
+            'attributes of a trait' => [TraitAttributesListenerStub::class, 2, 4, 4],
+            'attributes of a trait of a parent' => [InheritsTraitAttributesListenerStub::class, 1, 4, 2],
             'attribute over the property of its class' => [AttributeAndPropertyListenerStub::class, 1, 4, 2],
             'property of a subclass over the attribute of its parent' => [OverridesAttributeListenerStub::class, 1, 6, 9],
             'method over attribute' => [AttributeAndMethodListenerStub::class, 1, 3, 7],
@@ -347,6 +349,25 @@ class AttributeBackoffIntListenerStub
 }
 
 class InheritsAttributesListenerStub extends AttributePolicyListenerStub
+{
+}
+
+#[Tries(4)]
+#[Backoff(2, 4, 6)]
+trait RetryPolicyTraitStub
+{
+}
+
+class TraitAttributesListenerStub
+{
+    use RetryPolicyTraitStub;
+
+    public function handle(): void
+    {
+    }
+}
+
+class InheritsTraitAttributesListenerStub extends TraitAttributesListenerStub
 {
 }
 
