@@ -3,7 +3,6 @@
 namespace RabbitEvents\Tests\Listener\Message;
 
 use Illuminate\Container\Container;
-use Mockery as m;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Dispatcher;
 use RabbitEvents\Listener\Message\Handler;
@@ -44,7 +43,7 @@ class HandlerFactoryTest extends TestCase
 
     private function factory(): HandlerFactory
     {
-        return new HandlerFactory(new Container(), m::mock(Releaser::class));
+        return new HandlerFactory(new Container(), new \RabbitEvents\Listener\Support\Releaser(new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders'), new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub()));
     }
 }
 

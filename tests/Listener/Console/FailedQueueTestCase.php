@@ -77,7 +77,7 @@ abstract class FailedQueueTestCase extends TestCase
             $message,
             static fn() => null,
             'App\\Listeners\\OrderListener@handle',
-            \Mockery::mock(\RabbitEvents\Listener\Support\Releaser::class)
+            new \RabbitEvents\Listener\Support\Releaser(new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders'), new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub())
         ))->countAttempt();
         $message->markAsFailed(new \RuntimeException($exception), 'App\\Listeners\\OrderListener');
 

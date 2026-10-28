@@ -3,8 +3,6 @@
 namespace RabbitEvents\Tests\Publisher;
 
 use Illuminate\Contracts\Support\Arrayable;
-use Mockery as m;
-use RabbitEvents\Foundation\Contracts\Transport;
 use RabbitEvents\Publisher\MessageFactory;
 use RabbitEvents\Publisher\Publisher;
 use RabbitEvents\Publisher\Support\AbstractPublishableEvent;
@@ -27,6 +25,24 @@ class PublisherTest extends TestCase
         );
 
         return new Publisher(new MessageFactory($registry), $sender, $outbox, $events);
+    }
+
+    /**
+     * Laravel's event dispatcher, with a listener that records MessagePublished.
+     *
+     * @return array{\Illuminate\Events\Dispatcher, object{events: list<\RabbitEvents\Publisher\Events\MessagePublished>}}
+     */
+    private function events(): array
+    {
+        $events = new \Illuminate\Events\Dispatcher(new \Illuminate\Container\Container());
+        $published = new class {
+            public array $events = [];
+        };
+        $events->listen(\RabbitEvents\Publisher\Events\MessagePublished::class, function ($event) use ($published) {
+            $published->events[] = $event;
+        });
+
+        return [$events, $published];
     }
 
     public function testPublish(): void
@@ -116,7 +132,7 @@ class PublisherTest extends TestCase
     {
         $event = new SomeEvent(new SomeModel(), ['foo' => 'bar'], 'Hello!');
         $outbox = new RecordingOutbox(takes: true);
-        $events = m::spy(\Illuminate\Contracts\Events\Dispatcher::class);
+        [$events, $published] = $this->events();
 
         $result = $this->makeRealPublisher($producer, $outbox, $events)->publish($event);
 
@@ -126,7 +142,7 @@ class PublisherTest extends TestCase
         self::assertSame($result, $outbox->stored[0][1]->id());
         self::assertSame('something.happened', $outbox->stored[0][1]->event);
         // Published means sent to the broker: the outbox dispatches it when it sends the message.
-        $events->shouldNotHaveReceived('dispatch');
+        self::assertSame([], $published->events);
     }
 
     public function testMessageTheOutboxDeclinesIsSent(): void
@@ -165,27 +181,22 @@ class PublisherTest extends TestCase
 
     public function testMessagePublishedIsDispatchedWhenTheMessageIsSent(): void
     {
-        $events = m::spy(\Illuminate\Contracts\Events\Dispatcher::class);
+        [$events, $published] = $this->events();
 
         $result = $this->makeRealPublisher($producer, null, $events)
             ->publish(new SomeEvent(new SomeModel(), ['foo' => 'bar'], 'Hello!'));
 
-        $events->shouldHaveReceived('dispatch')->once()->with(m::on(
-            fn($event) => $event instanceof \RabbitEvents\Publisher\Events\MessagePublished
-                && $event->message->id() === $result
-                && $event->message->event === 'something.happened'
-        ));
+        self::assertCount(1, $published->events);
+        self::assertSame($result, $published->events[0]->message->id());
+        self::assertSame('something.happened', $published->events[0]->message->event);
+        self::assertSame($producer->sent[0]['message'], $published->events[0]->message->transportMessage());
     }
 
     public function testMessagePublishedIsNotDispatchedWhenSendingFails(): void
     {
-        $events = m::spy(\Illuminate\Contracts\Events\Dispatcher::class);
-        $transport = m::mock(Transport::class);
-        $transport->shouldReceive('send')->andThrow(new \RuntimeException('Broker unavailable'));
-        $registry = new \RabbitEvents\Foundation\Serialization\SerializerRegistry();
-        $registry->register(new \RabbitEvents\Foundation\Serialization\JsonSerializer());
-
-        $publisher = new Publisher(new MessageFactory($registry), $transport, null, $events);
+        [$events, $published] = $this->events();
+        $publisher = $this->makeRealPublisher($producer, null, $events);
+        $producer->throwException(new \RuntimeException('Broker unavailable'));
 
         try {
             $publisher->publish(new SomeEvent(new SomeModel(), ['foo' => 'bar'], 'Hello!'));
@@ -194,7 +205,7 @@ class PublisherTest extends TestCase
             self::assertSame('Broker unavailable', $e->getMessage());
         }
 
-        $events->shouldNotHaveReceived('dispatch');
+        self::assertSame([], $published->events);
     }
 
     public function testNullOutboxTakesNothing(): void
@@ -213,12 +224,12 @@ class PublisherTest extends TestCase
                 return false;
             }
         };
-        $app->instance(\RabbitEvents\Foundation\Context::class, $context = m::mock(\RabbitEvents\Foundation\Context::class));
-        $context->shouldReceive('makeTopic')->andReturn(new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('events'));
-        $context->shouldReceive('createProducer')->andReturn($producer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub());
         $registry = new \RabbitEvents\Foundation\Serialization\SerializerRegistry();
         $registry->register(new \RabbitEvents\Foundation\Serialization\JsonSerializer());
         $app->instance(\RabbitEvents\Foundation\Serialization\SerializerRegistry::class, $registry);
+        $connection = new \RabbitEvents\Tests\Foundation\Stubs\ConnectionStub();
+        $connection->producer = $producer = new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub();
+        $app->instance(\RabbitEvents\Foundation\Context::class, new \RabbitEvents\Foundation\Context($connection, $registry));
         // An outbox package binds its implementation; the provider must not override it.
         $app->singleton(\RabbitEvents\Publisher\Contracts\Outbox::class, fn() => new RecordingOutbox(takes: true));
 

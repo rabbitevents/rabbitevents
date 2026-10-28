@@ -488,7 +488,7 @@ class FakeHandler extends Handler
             $message, 
             $this->callback, 
             'FakeListener', 
-            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
+            new \RabbitEvents\Listener\Support\Releaser(new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders'), new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub())
         );
     }
 

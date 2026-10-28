@@ -2,10 +2,11 @@
 
 namespace RabbitEvents\Tests\Listener\Message;
 
-use Mockery as m;
-use RabbitEvents\Foundation\Contracts\Transport;
 use RabbitEvents\Foundation\Message;
 use RabbitEvents\Listener\Message\Handler;
+use RabbitEvents\Listener\Support\Releaser;
+use RabbitEvents\Tests\Foundation\Stubs\DestinationStub;
+use RabbitEvents\Tests\Foundation\Stubs\ProducerStub;
 use RabbitEvents\Tests\Listener\Payload;
 use RabbitEvents\Tests\Listener\TestCase;
 
@@ -35,7 +36,7 @@ class HandlerTest extends TestCase
             $this->getMessage(),
             static fn($event, $payload) => $event,
             $this->listenerClass,
-            m::mock(\RabbitEvents\Listener\Support\Releaser::class)
+            $this->releaser()
         );
 
         self::assertEquals("{$this->event}:{$this->listenerClass}", $handler->getName());
@@ -69,9 +70,10 @@ class HandlerTest extends TestCase
 
         $listener = new FailingListener();
         $message = $this->getMessage();
-        $transport = m::spy(\RabbitEvents\Listener\Support\Releaser::class);
+        $producer = new ProducerStub();
 
-        $handler = new Handler($message, static fn($event, $payload) => $event, FailingListener::class, $transport, [$listener, 'failed']);
+        // The deprecated $failedCallback (until 11.0); failed() through RegisteredListener: RetryPolicyTest.
+        $handler = new Handler($message, static fn($event, $payload) => $event, FailingListener::class, $this->releaser($producer), [$listener, 'failed']);
 
         try {
             $handler->fail($exception);
@@ -79,7 +81,7 @@ class HandlerTest extends TestCase
             self::assertTrue($handler->hasFailed());
             self::assertTrue($message->hasFailed());
             self::assertEquals($message->payload->value(), $listener->payload);
-            $transport->shouldNotHaveReceived('send');
+            self::assertSame([], $producer->sent, 'A failed message is not released');
         }
     }
 
@@ -100,20 +102,21 @@ class HandlerTest extends TestCase
             new Message('some.event', new Payload([])),
             static fn($event, $payload) => $event,
             $this->listenerClass,
-            $transport = m::spy(\RabbitEvents\Listener\Support\Releaser::class)
+            $this->releaser($producer = new ProducerStub())
         );
 
         $handler->release(10);
 
-        $transport->shouldHaveReceived()->release(m::type(Message::class), 10);
-
         self::assertTrue($handler->isReleased());
+        self::assertCount(1, $producer->sent);
+        self::assertSame('some.event', $producer->sent[0]['message']->getProperty('event'));
+        self::assertSame(10, $producer->deliveryDelay);
     }
 
     public function testAttemptsAreCountedPerListener()
     {
         $message = $this->getMessage()->increaseAttempts()->increaseAttempts();
-        $releaser = m::mock(\RabbitEvents\Listener\Support\Releaser::class);
+        $releaser = $this->releaser();
         $first = new Handler($message, static fn() => null, 'App\\First@handle', $releaser);
         $second = new Handler($message, static fn() => null, 'App\\Second@handle', $releaser);
 
@@ -131,12 +134,17 @@ class HandlerTest extends TestCase
     public function testClosureAttemptsAreDeliveriesOfTheMessage()
     {
         $message = $this->getMessage()->increaseAttempts()->increaseAttempts();
-        $handler = new Handler($message, static fn() => null, \Closure::class, m::mock(\RabbitEvents\Listener\Support\Releaser::class));
+        $handler = new Handler($message, static fn() => null, \Closure::class, $this->releaser());
 
         $handler->countAttempt();
 
         self::assertSame(2, $handler->attempts());
         self::assertNull($message->getProperty('x-listener-attempts'));
+    }
+
+    private function releaser(?ProducerStub $producer = null): Releaser
+    {
+        return new Releaser(new DestinationStub('orders'), $producer ?? new ProducerStub());
     }
 
     protected function getMessage(): Message
@@ -150,7 +158,7 @@ class HandlerTest extends TestCase
             $this->getMessage(),
             $callback ?: static fn($event, $payload) => $event,
             $listenerClass ?: $this->listenerClass,
-            m::spy(\RabbitEvents\Listener\Support\Releaser::class)
+            $this->releaser()
         );
     }
 }
