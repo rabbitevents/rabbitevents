@@ -15,7 +15,6 @@ use RabbitEvents\Listener\Events\KillSwitchRestarted;
 use RabbitEvents\Listener\Events\KillSwitchTripped;
 use RabbitEvents\Listener\Events\MessageProcessingFailed;
 use RabbitEvents\Listener\Events\WorkerStopping;
-use RabbitEvents\Listener\Exceptions\MaxAttemptsExceededException;
 use RabbitEvents\Listener\Exceptions\TimeoutExceededException;
 use RabbitEvents\Listener\Message\Processor;
 use RabbitEvents\Listener\Support\KillSwitch;
@@ -30,6 +29,11 @@ class Worker
      * Indicates if the worker should exit.
      */
     public bool $shouldQuit = false;
+
+    /**
+     * A message went back to the queue as it was received (see requeue()): the worker must stop.
+     */
+    protected bool $requeued = false;
 
     protected ?Transport $failer = null;
 
@@ -84,21 +88,21 @@ class Worker
                     $this->registerTimeoutHandler($message, $consumer, $options);
                 }
 
-                $completed = $this->processMessage($processor, $message, $options);
+                $interruption = $this->processMessage($processor, $message, $options);
 
                 if ($supportsAsyncSignals) {
                     $this->resetTimeoutHandler();
                 }
 
                 if ($message->hasFailed()) {
-                    $this->failMessage($message, $consumer);
-                } elseif ($completed || $message->isReleased()) {
+                    $this->failOrRequeue($message, $consumer);
+                } elseif (!$interruption || $message->isReleased()) {
                     $consumer->acknowledge($message);
                 } else {
-                    $this->returnInterruptedMessage($message, $consumer, $options);
+                    $this->returnInterruptedMessage($message, $consumer, $options, $interruption);
                 }
 
-                $tripped = (bool) $this->killSwitch?->record(failed: !$completed);
+                $tripped = (bool) $this->killSwitch?->record(failed: $interruption !== null);
             }
 
             $status = $this->stopIfNecessary($options);
@@ -136,20 +140,18 @@ class Worker
      * @param Processor $processor
      * @param Message $message
      * @param ListenerOptions $options
-     * @return bool False if processing threw
+     * @return Throwable|null What processing threw
      */
-    private function processMessage(Processor $processor, Message $message, ListenerOptions $options): bool
+    private function processMessage(Processor $processor, Message $message, ListenerOptions $options): ?Throwable
     {
         try {
-            $this->skipIfAlreadyExceedsMaxAttempts($message, $options);
-
             $processor->process($message, $options);
 
-            return true;
+            return null;
         } catch (Throwable $throwable) {
             $this->exceptions->report($throwable);
 
-            return false;
+            return $throwable;
         }
     }
 
@@ -157,17 +159,58 @@ class Worker
      * Processing threw outside the listeners (a failing listener releases the message itself), so the
      * message was not handled completely and must not be acknowledged as handled. A released copy keeps
      * `x-succeeded-listeners`, so listeners that already handled it skip it. Requeueing the original is
-     * the fallback: RabbitMQ redelivers it as it was received, and those listeners run again.
+     * the fallback, and it stops the worker (see requeue()).
+     * On its `--tries`th delivery the message fails instead, so that an interruption can't loop forever.
      */
-    protected function returnInterruptedMessage(Message $message, Consumer $consumer, ListenerOptions $options): void
-    {
+    protected function returnInterruptedMessage(
+        Message $message,
+        Consumer $consumer,
+        ListenerOptions $options,
+        Throwable $interruption
+    ): void {
+        if ($options->maxTries > 0 && $message->attempts() >= $options->maxTries) {
+            $message->markAsFailed($interruption);
+            $this->events->dispatch(new MessageProcessingFailed($message, $interruption));
+            $this->failOrRequeue($message, $consumer);
+
+            return;
+        }
+
         try {
             $this->releaser?->release($message, $options->sleep);
         } catch (Throwable $throwable) {
             $this->exceptions->report($throwable);
         }
 
-        $message->isReleased() ? $consumer->acknowledge($message) : $consumer->reject($message, true);
+        $message->isReleased() ? $consumer->acknowledge($message) : $this->requeue($message, $consumer);
+    }
+
+    /**
+     * A message that can't be moved to the failed queue (the broker refuses the publish) is not lost: it goes back
+     * to its queue.
+     */
+    protected function failOrRequeue(Message $message, Consumer $consumer): void
+    {
+        try {
+            $this->failMessage($message, $consumer);
+        } catch (Throwable $throwable) {
+            $this->exceptions->report($throwable);
+
+            $this->requeue($message, $consumer);
+        }
+    }
+
+    /**
+     * Return the message as it was received, when no copy of it could be published. Its attempts, the listeners that
+     * handled it and its failure aren't recorded in it, and RabbitMQ puts it at the head of the queue: this worker
+     * would handle it again at once, forever, running even the listeners that had handled it, and `--tries` could
+     * never stop it. So the worker stops; the process manager restarts it later.
+     */
+    protected function requeue(Message $message, Consumer $consumer): void
+    {
+        $consumer->reject($message, true);
+
+        $this->requeued = true;
     }
 
     /**
@@ -232,22 +275,6 @@ class Worker
         }
     }
 
-    protected function skipIfAlreadyExceedsMaxAttempts(Message $message, ListenerOptions $options): void
-    {
-        if ($options->maxTries === 0 || $message->attempts() <= $options->maxTries) {
-            return;
-        }
-
-        $e = new MaxAttemptsExceededException(
-            'The Message handle tries has been attempted too many times.'
-        );
-        $message->markAsFailed($e);
-
-        $this->events->dispatch(new MessageProcessingFailed($message, $e));
-
-        throw $e;
-    }
-
     /**
      * Reset the worker timeout handler.
      */
@@ -273,6 +300,10 @@ class Worker
      */
     protected function stopIfNecessary(ListenerOptions $options): ?WorkerExitStatus
     {
+        if ($this->requeued) {
+            return WorkerExitStatus::ERROR;
+        }
+
         if ($this->shouldQuit) {
             return WorkerExitStatus::SUCCESS;
         }

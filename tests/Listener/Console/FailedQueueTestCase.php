@@ -72,6 +72,13 @@ abstract class FailedQueueTestCase extends TestCase
             $properties
         );
         $message->increaseAttempts();
+        // As Processor counts the attempt of the listener that failed
+        (new \RabbitEvents\Listener\Message\Handler(
+            $message,
+            static fn() => null,
+            'App\\Listeners\\OrderListener@handle',
+            new \RabbitEvents\Listener\Support\Releaser(new \RabbitEvents\Tests\Foundation\Stubs\DestinationStub('orders'), new \RabbitEvents\Tests\Foundation\Stubs\ProducerStub())
+        ))->countAttempt();
         $message->markAsFailed(new \RuntimeException($exception), 'App\\Listeners\\OrderListener');
 
         $dlxProducer = new ProducerStub();

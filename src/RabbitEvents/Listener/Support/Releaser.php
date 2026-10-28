@@ -27,12 +27,13 @@ class Releaser extends Sender implements DelaysDelivery
     }
 
     /**
-     * Transports that can't delay a delivery (e.g. Redis) retry right away.
+     * Transports that can't delay a delivery (e.g. Redis) retry right away. A negative delay is no delay: RabbitMQ
+     * refuses a delay queue with a negative `x-message-ttl`.
      */
     public function setDelay(int $delay = 0): void
     {
         if ($this->producer instanceof DelaysDelivery) {
-            $this->producer->setDelay($this->secondsUntil($delay));
+            $this->producer->setDelay(max(0, $this->secondsUntil($delay)));
         }
     }
 }

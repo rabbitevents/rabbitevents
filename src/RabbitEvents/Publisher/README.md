@@ -12,6 +12,7 @@ The RabbitEvents Publisher is the part that informs all other microservices that
    - [Using an Event class](#using-an-event-class)
    - [Using the `publish` function](#using-the-publish-function)
    - [Transactional Publishing (`afterCommit`)](#transactional-publishing-aftercommit)
+   - [When Publishing Fails](#when-publishing-fails)
    - [Distributed Tracing & Context Propagation](#distributed-tracing--context-propagation)
    - [Publish an Event object with the `publish` function](#publish-an-event-object-with-the-publish-function)
    - [Publishing Protobuf Messages](#publishing-protobuf-messages)
@@ -127,6 +128,25 @@ publish((new PaymentSucceededRabbitEvent($request->user(), $payment))->afterComm
 RabbitEvents then delays publishing until the active database transaction commits. If the transaction rolls back, the event is not published. Inside a transaction `publish()` returns `null`, because the message ID is only known once the message is actually sent.
 
 Don't redeclare `$afterCommit` in your event class: the `Publishable` trait already declares it, and PHP rejects a trait property redeclared with a different default.
+
+### When Publishing Fails
+
+`publish()` sends the message right away and doesn't retry: if the broker can't be reached, the exception reaches your code. Inside `DB::transaction()` it rolls the transaction back. An `afterCommit` event is published after the commit, so a failure then loses the event unless you catch the exception.
+
+When a message is sent, the publisher dispatches `RabbitEvents\Publisher\Events\MessagePublished` with the message. "Sent" means written to the connection: RabbitEvents doesn't use publisher confirms.
+
+```php
+use Illuminate\Support\Facades\Event;
+use RabbitEvents\Publisher\Events\MessagePublished;
+
+Event::listen(function (MessagePublished $published) {
+    logger()->debug('Published', ['id' => $published->message->id(), 'event' => $published->message->event]);
+});
+```
+
+An outbox can take the messages instead and deliver them itself (`RabbitEvents\Publisher\Contracts\Outbox`, bound to `NullOutbox`, which takes none). The publisher gives it each message when it publishes the event, so an `afterCommit` event reaches it after the commit. An outbox dispatches `MessagePublished` when it sends a message.
+
+If your service has a database, install [`rabbitevents/outbox`](https://github.com/rabbitevents/outbox): it writes the messages to a table, in the transaction of the event when there is one, and delivers them until they are sent or their time to live is over. Its README describes the guarantees, coalescing and the relay worker.
 
 ### Distributed Tracing & Context Propagation
 

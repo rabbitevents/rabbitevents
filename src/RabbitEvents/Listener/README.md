@@ -17,6 +17,7 @@ If you only need to handle events, you can use the RabbitEvents `Listener` separ
    - [Pipeline Middleware (Onion-style)](#pipeline-middleware-onion-style)
 6. [Stopping The Propagation Of An Event](#stopping-propagation)
 7. [Reliability](#reliability)
+   - [Retries](#retries)
    - [Failed Messages](#failed-messages)
    - [Kill Switch](#kill-switch)
    - [Deduplication](#deduplication)
@@ -314,18 +315,68 @@ Sometimes, you may wish to stop the propagation of an event to other listeners. 
 
 RabbitEvents relies only on RabbitMQ: no database tables, Redis instances or migrations are required.
 
+## Retries <a name="retries"></a>
+
+When a listener throws, the message is put back into its queue and tried again after `--sleep` seconds, until the listener has been tried `--tries` times. A listener class can set its own limits, as Laravel queued listeners do:
+
+```php
+class SendInvoice
+{
+    // Or a tries() method. 0 means unlimited.
+    public int $tries = 5;
+
+    // Or a backoff() method returning an int or an array
+    public array $backoff = [1, 5, 30];
+
+    public function handle(array $payload): void
+    {
+        // ...
+    }
+}
+```
+
+Or with attributes:
+
+```php
+use RabbitEvents\Listener\Attributes\Backoff;
+use RabbitEvents\Listener\Attributes\Tries;
+
+#[Tries(5)]
+#[Backoff(1, 5, 30)]
+class SendInvoice
+{
+    public function handle(array $payload): void
+    {
+        // ...
+    }
+}
+```
+
+- `$tries`, `tries()` or `#[Tries]` overrides `--tries` for this listener.
+- `$backoff`, `backoff()` or `#[Backoff]` overrides `--sleep`: an `int` is the delay before every retry; an array gives the delay after the first, second, ... attempt, and its last value applies to the rest (`[1, 5, 30]` waits 1s, 5s, then 30s for every further retry). An empty array falls back to `--sleep`.
+- Laravel's `Illuminate\Queue\Attributes\Tries` and `Backoff` work as well, when `illuminate/queue` provides them.
+- If a listener declares an option in several ways, as in Laravel, the method wins, then the attribute, then the property. An attribute can be set on the class, on a trait it uses or on a parent class. A subclass that redeclares the property overrides the attribute of its parent.
+- As in Laravel, they are read from the class without calling its constructor, so no dependencies are resolved for them and a value set in the constructor is ignored. `tries()` and `backoff()` get the same arguments as the handler method. A `[$object, 'method']` or invokable object listener is read from that object.
+- Tries are counted **per listener**, in the `x-listener-attempts` property: if two listeners handle a message and the first one fails once, the second one still gets all its tries. Methods of one subscriber class share its `$tries`/`$backoff` but count their attempts separately.
+- Closures can't be identified across deliveries: they count the deliveries of the message (`x-attempts`), which include the retries of other listeners of the message, and use `--tries` and `--sleep`. A closure is never failed before it runs: when it throws on a delivery past `--tries`, the message fails.
+- `failed()` is called on the listener instance that handled the message, so it sees the state `handle()` left (Laravel calls it on a new instance).
+- Each distinct delay gets its own delay queue in RabbitMQ (created on first use). Transports that can't delay a delivery (Redis) retry right away.
+- To fail without retrying, throw `RabbitEvents\Listener\Exceptions\FailedException`.
+
 ## Failed Messages <a name="failed-messages"></a>
 
-A message fails when a listener exhausts its tries (`--tries`), exceeds the timeout (`--timeout`), or throws `RabbitEvents\Listener\Exceptions\FailedException`. RabbitEvents then moves it to the `{queue}.failed` queue instead of dropping it:
+A message fails when a listener exhausts its tries (`--tries` or [its own](#retries)), exceeds the timeout (`--timeout`), or throws `RabbitEvents\Listener\Exceptions\FailedException`. RabbitEvents then moves it to the `{queue}.failed` queue instead of dropping it:
 
 - `{queue}.failed` is a plain durable queue declared by `rabbitevents:listen` next to the listener queue. The listener queue itself is declared exactly as in 9.x, without extra arguments, so 9.x and 10.x workers can consume the same queue.
 - The failed message keeps its payload, `message_id` and `trace_context` and gets these properties: `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` (message and trace are cut to 4 KB to fit into one AMQP frame) and `x-listener`.
 - Messages published by RabbitEvents 9.x have no `message_id`. They get one when moved to `{queue}.failed`, so they can be retried or deleted by ID.
-- Listeners that already succeeded on a message are recorded in `x-succeeded-listeners` and are skipped when the message is retried, both after `--sleep` releases and after `rabbitevents:retry`. Listeners should still be idempotent.
+- Listeners that already succeeded on a message are recorded in `x-succeeded-listeners` and are skipped when the message is retried, both after a listener released it and after `rabbitevents:retry`. Listeners should still be idempotent. `rabbitevents:retry` resets the attempts, so every listener gets all its tries again.
 
 ### Interrupted processing <a name="interrupted-messages"></a>
 
-If processing throws outside the listeners (e.g. in a custom `Deduplicator`), the message is not acknowledged as handled. It is put back into its queue the same way a failed listener releases it (after `--sleep`, counting as an attempt), with `x-succeeded-listeners`, so the listeners that already handled it skip it. Only if the message can't be put back (e.g. the broker is unavailable) is the original returned to RabbitMQ unchanged, and then its listeners run again.
+If processing throws outside the listeners (e.g. in a custom `Deduplicator`), the message is not acknowledged as handled. It is put back into its queue the same way a failed listener releases it (after `--sleep`), with `x-succeeded-listeners`, so the listeners that already handled it skip it. On its `--tries`th delivery it is moved to `{queue}.failed` instead, so that a permanent failure outside the listeners can't loop forever. Only if the message can't be put back is the original returned to RabbitMQ unchanged, and then its listeners run again.
+
+If the worker can neither release a message nor move it to `{queue}.failed` (publishing fails), it returns the original to the queue and stops with exit code 1, and so does a worker without a releaser whose message can only be returned. (When RabbitMQ itself refuses the publish, for example a delay queue declared with other arguments, it closes the worker's channel: the worker exits with that exception, and RabbitMQ returns the unacknowledged message.) The original carries no record of this delivery, and RabbitMQ gives it back to the same worker at once: a worker that went on would handle it again and again, and `--tries` could never stop it. Your process manager (Supervisor, systemd, Kubernetes) restarts the worker; configure a restart delay.
 
 Manage failed messages with the [failed message commands](#failed-commands). To drop failed messages instead, as 9.x did, set `RABBITEVENTS_FAILED_QUEUE_ENABLED=false` (`rabbitevents.failed_queue.enabled`).
 
@@ -398,8 +449,8 @@ You can start listening to an event only by using the `rabbitevents:listen` comm
 `--service=` - By default, it's `config('app.name')`. When a queue starts, the name of the service becomes a part of a queue name: `service:event.name`. You could override the first part of a queue name by this option.\
 `--memory=128` - The memory limit in megabytes. The RabbitEvents worker restarts if the limit is exceeded.\
 `--timeout=60` - The length of time (in seconds) each Message should be allowed to be handled.\
-`--tries=1` - The number of times to attempt to handle a Message before moving it to the [failed queue](#failed-messages) (`{queue}.failed`).\
-`--sleep=5` - How long in seconds a worker would wait before the next try to handle a failed message.\
+`--tries=1` - The number of times to attempt a listener before moving the Message to the [failed queue](#failed-messages) (`{queue}.failed`), unless the listener sets [its own `$tries`](#retries).\
+`--sleep=5` - How long in seconds to wait before the next try of a listener that failed, unless it sets [its own `$backoff`](#retries).\
 `--quiet` - Hide console output.\
 `-v` - Verbosity. Enables a stack trace for Exceptions.
 

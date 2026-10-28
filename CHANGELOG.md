@@ -2,10 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [10.1.0]
+
+This release is about reliability: workers pause instead of failing a whole queue while a dependency is down, each listener gets its own retry policy, no message is lost or handled in a loop when the worker can't publish, and publishing can go through an outbox.
 
 ### Added
+- **Outbox hook**: `RabbitEvents\Publisher\Contracts\Outbox` can take published messages to deliver them itself, e.g. from a table written in the transaction of the event. It is bound to `NullOutbox`, which takes none, so nothing changes without an outbox package. The optional [`rabbitevents/outbox`](https://github.com/rabbitevents/outbox) package implements it with a database table (suggested in `composer.json`). An `afterCommit` event reaches the outbox after the commit, as it is published now.
+- **`MessagePublished` event**: the publisher dispatches `RabbitEvents\Publisher\Events\MessagePublished` when it sends a message (an outbox, when it sends a message it took).
 - **Kill switch**: a worker stops consuming for `restart_timeout` seconds when at least `trip_threshold` percent of the messages it handled in the last `tracking_period` seconds failed (after `activation_threshold` messages), instead of moving the whole queue to `{queue}.failed` while a dependency is down. After the pause, a failing first message trips it again. Disabled by default (`rabbitevents.kill_switch.enabled`, `RABBITEVENTS_KILL_SWITCH_*`); the worker dispatches `KillSwitchTripped` and `KillSwitchRestarted`. Nothing changes on the wire.
+- **Retry policy per listener**: a listener class can set `$tries`, `tries()` or `#[Tries]`, and `$backoff`, `backoff()` or `#[Backoff]`. They override `--tries` and `--sleep` for this listener, as in Laravel queued listeners. Both `RabbitEvents\Listener\Attributes` and Laravel's `Illuminate\Queue\Attributes` are supported. Backoff is an int, or an array of delays per attempt whose last value repeats. The options are read from the class without calling its constructor, and `tries()` / `backoff()` get the handler's arguments.
+
+### Changed behaviour
+- Tries are counted per listener in the new `x-listener-attempts` property (`[[Class@method, attempts], ...]`; 9.x ignores it). Before, all listeners of a message shared its delivery count, so a listener got fewer tries when another one had failed on the same message. Closures still count deliveries (`x-attempts`). `Handler::attempts()` (also in listener events and logs) returns the attempts of the listener.
+- The worker no longer fails a message delivered more than `--tries` times before running its listeners: each listener checks its own tries and is failed without running if it used them up. A message interrupted outside its listeners is moved to `{queue}.failed` on its `--tries`th delivery instead of being released once more.
+- `rabbitevents:retry` resets `x-listener-attempts` together with `x-attempts`.
+- `failed()` is called on the listener instance that handled the message, so it sees the state `handle()` left, instead of on a new instance.
+- `Dispatcher::makeListener()` returns a callable `RegisteredListener` for class and object listeners instead of a `Closure` (closures are still returned as they are); `Handler` accepts any callable. `RegisteredListener` builds the listener and reads its retry policy, `failed()` and middleware; the protected `Dispatcher` methods `instantiateListener()`, `makeListenerInstance()` and `extractMiddleware()` are removed.
+
+### Fixed
+- A message failed while its `{queue}.failed` queue was deleted (e.g. by hand while the worker ran) was lost without an error: RabbitMQ dropped the copy as unroutable, and the original was acknowledged. The failed queue is now declared again before each message sent to it.
+- A worker whose publishing failed while it could still consume looped forever on one message. When releasing a message failed, the worker returned the original to the queue as it was received, without its attempts, and RabbitMQ gave it back at once: `--tries` never stopped it, and the listeners that had handled it ran again on every round. A message that couldn't be moved to `{queue}.failed` made the worker exit with an exception. Now the worker returns such a message to the queue and stops with exit code 1, and the process manager restarts it. (When RabbitMQ refuses a publish, it closes the channel, and the worker exits with that exception as before.)
+- `failed()` of a `[$object, 'method']` or invokable object listener was called on a new instance of its class built by the container, which failed for a constructor with parameters the container can't resolve; the object itself is used now.
+- A negative delay before a retry (`--sleep=-1`, or a negative `$backoff`) made RabbitMQ refuse the delay queue (negative `x-message-ttl`, 406) and the worker exit with an exception. The message is now retried right away.
+
+### Deprecated
+- The `$container` parameter of `HandlerFactory::__construct()`: it isn't used, since listeners are built by `RegisteredListener`. It will be removed in 11.0.
+- The `$failedCallback` parameter of `Handler::__construct()`: `HandlerFactory` doesn't pass it any more, since `failed()` is called through `RegisteredListener`. It will be removed in 11.0.
 
 ## [10.0.1]
 

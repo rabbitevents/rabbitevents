@@ -19,6 +19,10 @@ class AmqpProducerAdapter implements Producer, DelaysDelivery
 
     public function send(Destination $destination, TransportMessage $message): void
     {
+        if ($destination instanceof AmqpFailedDestinationAdapter) {
+            $destination->declare();
+        }
+
         $this->producer->send($destination->getOrigin(), $message->getOrigin());
     }
 

@@ -39,6 +39,20 @@ class ReleaserTest extends TestCase
         self::assertCount(1, $this->producerStub->sent);
     }
 
+    /**
+     * A negative delay (`--sleep=-1`, `$backoff = -1`) would declare a delay queue with a negative `x-message-ttl`,
+     * which RabbitMQ refuses with 406 and closes the channel.
+     */
+    public function testNegativeDelayRetriesRightAway(): void
+    {
+        $releaser = new Releaser($this->queueStub, $this->producerStub);
+
+        $releaser->release($this->message, -5);
+
+        self::assertSame(0, $this->producerStub->deliveryDelay);
+        self::assertCount(1, $this->producerStub->sent);
+    }
+
     public function testSendsRightAwayWhenTheProducerCannotDelay(): void
     {
         $producer = new class implements \RabbitEvents\Foundation\Contracts\Producer {

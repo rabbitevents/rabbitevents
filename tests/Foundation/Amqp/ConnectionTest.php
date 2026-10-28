@@ -69,4 +69,56 @@ class ConnectionTest extends TestCase
         self::assertSame('test.queue', $failedDestination->getOriginalQueueName());
         self::assertSame($queue, $failedDestination->getOrigin());
     }
+
+    /**
+     * Messages are published straight to the failed queue. If it was deleted while the worker runs, RabbitMQ drops
+     * them (unroutable) and the original is acknowledged: it is declared again before each message.
+     */
+    public function testFailedQueueIsDeclaredBeforeEachMessageSentToIt(): void
+    {
+        $failedQueue = new \Interop\Amqp\Impl\AmqpQueue('test.queue.failed');
+        $queue = new \Interop\Amqp\Impl\AmqpQueue('test.queue');
+        $message = new \Interop\Amqp\Impl\AmqpMessage('{}');
+        $producer = m::mock(\Interop\Amqp\AmqpProducer::class);
+
+        $context = m::mock(AmqpContext::class);
+        $context->shouldReceive('createQueue')->with('test.queue.failed')->andReturn($failedQueue);
+        $context->shouldReceive('createQueue')->with('test.queue')->andReturn($queue);
+        $context->shouldReceive('createProducer')->andReturn($producer);
+
+        $context->shouldReceive('declareQueue')->with($queue)->once()->ordered();
+        $context->shouldReceive('declareQueue')->with($failedQueue)->once()->ordered();
+        $context->shouldReceive('declareQueue')->with($failedQueue)->once()->ordered();
+        $producer->shouldReceive('send')->with($failedQueue, $message)->once()->ordered();
+        $context->shouldReceive('declareQueue')->with($failedQueue)->once()->ordered();
+        $producer->shouldReceive('send')->with($failedQueue, $message)->once()->ordered();
+        // Other queues are not declared again: a released message goes to a queue the worker consumes.
+        $producer->shouldReceive('send')->with($queue, $message)->once()->ordered();
+
+        $conn = $this->connectionWithContext($context);
+        $destination = new \RabbitEvents\Foundation\Amqp\AmqpDestinationAdapter(
+            (new \RabbitEvents\Foundation\Amqp\QueueFactory($context, $conn))->makeAndDeclare('test.queue')
+        );
+        $failedDestination = $conn->makeFailedQueue('test.queue');
+        $transportMessage = new \RabbitEvents\Foundation\Amqp\AmqpTransportMessage($message);
+
+        $conn->createProducer()->send($failedDestination, $transportMessage);
+        $conn->createProducer()->send($failedDestination, $transportMessage);
+        $conn->createProducer()->send($destination, $transportMessage);
+    }
+
+    private function connectionWithContext(AmqpContext $context): Connection
+    {
+        return new class(['exchange' => 'events', 'durable' => true], $context) extends Connection {
+            public function __construct(array $config, private $mockContext)
+            {
+                parent::__construct($config);
+            }
+
+            public function createContext(): AmqpContext
+            {
+                return $this->mockContext;
+            }
+        };
+    }
 }

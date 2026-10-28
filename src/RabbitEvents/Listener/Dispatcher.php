@@ -10,7 +10,6 @@ use Illuminate\Contracts\Container\Container as ContainerContract;
 use Illuminate\Events\Dispatcher as BaseDispatcher;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
 
 class Dispatcher extends BaseDispatcher
 {
@@ -101,40 +100,61 @@ class Dispatcher extends BaseDispatcher
     /**
      * @inheritdoc
      */
-    public function makeListener($listener, $wildcard = false): Closure
+    public function makeListener($listener, $wildcard = false): Closure|RegisteredListener
     {
         // A closure is called as Handler calls it, with ($event, $payload), as in every released version.
         if ($listener instanceof Closure) {
             return $listener;
         }
 
-        return function ($event, $payload) use ($listener, $wildcard) {
-            $listener = $this->instantiateListener($listener);
-            $arguments = static::listenerArguments($payload);
-            $call = function (array $passed) use ($listener, $wildcard, $event, $payload, $arguments) {
-                if (!$wildcard) {
-                    return parent::makeListener($listener)($event, $passed);
-                }
+        return new RegisteredListener($this, $this->container, $listener, (bool) $wildcard);
+    }
 
-                // A wildcard listener gets ($event, $payload) like in Laravel and 9.x; if an onion middleware
-                // passed something else to $next, it gets that.
-                $passedPayload = $passed === $arguments ? $payload : static::payloadFromArguments($passed);
-
-                return parent::makeListener($listener, true)($event, $passedPayload);
-            };
-
-            if (empty($throughMiddleware = $this->extractMiddleware($listener))) {
-                return $call($arguments);
+    /**
+     * Calls a listener instance through its middleware (see RegisteredListener).
+     *
+     * @param array{object, string} $listener
+     * @param array $middleware the listener's middleware definitions
+     */
+    public function callListener(array $listener, array $middleware, bool $wildcard, string $event, mixed $payload): mixed
+    {
+        $arguments = static::listenerArguments($payload);
+        $call = function (array $passed) use ($listener, $wildcard, $event, $payload, $arguments) {
+            if (!$wildcard) {
+                return parent::makeListener($listener)($event, $passed);
             }
 
-            return (new Pipeline($this->container))
-                ->send($arguments)
-                ->through(array_map(
-                    fn ($middleware) => $this->wrapMiddlewareIntoPipelineStage($middleware, $event, $wildcard),
-                    $throughMiddleware
-                ))
-                ->then($call);
+            // A wildcard listener gets ($event, $payload) like in Laravel and 9.x; if an onion middleware
+            // passed something else to $next, it gets that.
+            $passedPayload = $passed === $arguments ? $payload : static::payloadFromArguments($passed);
+
+            return parent::makeListener($listener, true)($event, $passedPayload);
         };
+
+        if ($middleware === []) {
+            return $call($arguments);
+        }
+
+        return (new Pipeline($this->container))
+            ->send($arguments)
+            ->through(array_map(
+                fn ($middleware) => $this->wrapMiddlewareIntoPipelineStage(
+                    $this->createMiddlewareCallable($middleware),
+                    $event,
+                    $wildcard
+                ),
+                $middleware
+            ))
+            ->then($call);
+    }
+
+    /**
+     * The arguments a listener's handler is called with (see callListener()). Its tries() and backoff() get the same,
+     * as in Laravel.
+     */
+    public function handlerArguments(bool $wildcard, string $event, mixed $payload): array
+    {
+        return $wildcard ? [$event, $payload] : static::listenerArguments($payload);
     }
 
     /**
@@ -246,70 +266,6 @@ class Dispatcher extends BaseDispatcher
         }
 
         return static::$middlewareExpectsNextCache[$key] = $expectsNext;
-    }
-
-    /**
-     * Turns a class listener into [instance, method]: one instance per message, shared by the listener's
-     * middleware and its handler, and not kept in the container, so no state leaks into the next message.
-     */
-    protected function instantiateListener(mixed $listener): mixed
-    {
-        if (is_string($listener)) {
-            $listener = Str::parseCallback($listener, 'handle');
-        }
-
-        if (!is_array($listener) || !is_string($listener[0])) {
-            return $listener;
-        }
-
-        $instance = $this->container->make($listener[0]);
-        $method = $listener[1] ?? 'handle';
-
-        return [$instance, method_exists($instance, $method) ? $method : '__invoke'];
-    }
-
-    protected function makeListenerInstance($listener)
-    {
-        if (is_array($listener)) {
-            return is_object($listener[0]) ? $listener[0] : $this->makeListenerInstance($listener[0]);
-        }
-
-        if (is_string($listener)) {
-            [$class,] = Str::parseCallback($listener);
-
-            return $this->container->make($class);
-        }
-
-        if (is_object($listener)) {
-            return $listener;
-        }
-
-        return null;
-    }
-
-    /**
-     * @param $listener
-     * @return ?array
-     */
-    protected function extractMiddleware($listener): ?array
-    {
-        $result = [];
-
-        if (!$instance = $this->makeListenerInstance($listener)) {
-            return $result;
-        }
-
-        if (isset($instance->middleware)) {
-            foreach ((array) $instance->middleware as $middleware) {
-                $result[] = $this->createMiddlewareCallable($middleware);
-            }
-        }
-
-        if (method_exists($instance, 'middleware')) {
-            $result[] = [$instance, 'middleware'];
-        }
-
-        return $result;
     }
 
     protected function createMiddlewareCallable($mixed): callable

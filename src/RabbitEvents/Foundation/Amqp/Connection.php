@@ -96,9 +96,12 @@ class Connection implements ConnectionContract
 
     public function makeFailedQueue(string $queueName): FailedDestination
     {
+        $factory = new QueueFactory($this->createContext(), $this);
+
         return new AmqpFailedDestinationAdapter(
-            (new QueueFactory($this->createContext(), $this))->makeAndDeclare($queueName . FailedDestination::SUFFIX),
-            $queueName
+            $factory->makeAndDeclare($queueName . FailedDestination::SUFFIX),
+            $queueName,
+            $factory
         );
     }
 

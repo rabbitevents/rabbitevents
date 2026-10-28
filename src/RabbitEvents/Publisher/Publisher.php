@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace RabbitEvents\Publisher;
 
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
 use RabbitEvents\Foundation\Contracts\Transport;
+use RabbitEvents\Publisher\Contracts\Outbox;
+use RabbitEvents\Publisher\Events\MessagePublished;
 
 class Publisher
 {
@@ -16,7 +19,9 @@ class Publisher
 
     public function __construct(
         private MessageFactory $messageFactory,
-        private Transport $transport
+        private Transport $transport,
+        private ?Outbox $outbox = null,
+        private ?Dispatcher $events = null
     ) {
     }
 
@@ -76,11 +81,17 @@ class Publisher
         return $this->executePublish($event);
     }
 
+    /**
+     * Send the message, or give it to the outbox, which sends it itself.
+     */
     protected function executePublish(ShouldPublish $event): ?string
     {
         $message = $this->messageFactory->make($event);
 
-        $this->transport->send($message);
+        if (!$this->outbox?->store($event, $message)) {
+            $this->transport->send($message);
+            $this->events?->dispatch(new MessagePublished($message));
+        }
 
         return $message->id();
     }
