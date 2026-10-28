@@ -29,10 +29,18 @@ class QueueFactory
             $queue->addFlag(AmqpDestination::FLAG_DURABLE);
         }
 
+        return $this->declare($queue);
+    }
+
+    /**
+     * Declare a queue made by makeAndDeclare() (again): it is created if it was deleted, and left as it is otherwise.
+     */
+    public function declare(AmqpQueue $queue): AmqpQueue
+    {
         try {
             $this->context->declareQueue($queue);
         } catch (Throwable $e) {
-            throw $this->isPreconditionFailed($e) ? new QueueArgumentsMismatchException($queueName, $e) : $e;
+            throw $this->isPreconditionFailed($e) ? new QueueArgumentsMismatchException($queue->getQueueName(), $e) : $e;
         }
 
         return $queue;

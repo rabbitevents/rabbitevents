@@ -156,20 +156,6 @@ class WorkerTest extends TestCase
         $this->workOnce($processor, $consumer, $releaser);
     }
 
-    public function testInterruptedMessageIsRequeuedWhenItCannotBeReleased(): void
-    {
-        $message = $this->createRealMessage();
-        $releaser = m::mock(Releaser::class);
-        $releaser->shouldReceive('release')->andThrow(new \RuntimeException('Broker unavailable'));
-
-        $consumer = m::mock(Consumer::class);
-        $consumer->shouldReceive('nextMessage')->andReturn($message);
-        $consumer->shouldNotReceive('acknowledge');
-        $consumer->shouldReceive('reject')->once()->with($message, true);
-
-        $this->workOnce($this->processorThrowing(new \RuntimeException()), $consumer, $releaser);
-    }
-
     public function testInterruptedMessageIsRequeuedWithoutReleaser(): void
     {
         $message = $this->createRealMessage();
@@ -178,7 +164,89 @@ class WorkerTest extends TestCase
         $consumer->shouldNotReceive('acknowledge');
         $consumer->shouldReceive('reject')->once()->with($message, true);
 
-        $this->workOnce($this->processorThrowing(new \RuntimeException()), $consumer);
+        $worker = new Worker($this->exceptionHandler, $this->events);
+        $worker->shouldQuit = true; // one tick only
+
+        // Requeued as it was received, so the worker stops (see the tests below).
+        self::assertSame(
+            WorkerExitStatus::ERROR,
+            $worker->work($this->processorThrowing(new \RuntimeException()), $consumer, $this->options)
+        );
+    }
+
+    public static function messagesThatCannotBeReturned(): array
+    {
+        $publishFailed = new \RuntimeException('PRECONDITION_FAILED on the delay queue');
+
+        return [
+            // Interrupted (e.g. Handler::release() threw), and the worker can't release it either.
+            'cannot be released' => [fn() => throw $publishFailed, null, 2, false],
+            'no releaser' => [null, null, 2, false],
+            // A listener used up its tries, and the message can't be moved to the failed queue.
+            'cannot be failed' => [null, fn() => throw $publishFailed, 2, true],
+            'interrupted on its last delivery, cannot be failed' => [
+                fn() => throw new \LogicException('Must be failed, not released'),
+                fn() => throw $publishFailed,
+                1,
+                false,
+            ],
+        ];
+    }
+
+    /**
+     * A requeued original comes back to the head of the queue with the counters it was received with, so
+     * `--tries` can never stop it: the worker would handle it again at once, forever, running even the listeners
+     * that had handled it. The worker stops instead; the process manager restarts it later.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('messagesThatCannotBeReturned')]
+    public function testWorkerStopsWhenMessageCanBeOnlyRequeued(
+        ?\Closure $release,
+        ?\Closure $fail,
+        int $maxTries,
+        bool $listenerFailed
+    ): void
+    {
+        $message = $this->createRealMessage(); // its first delivery
+
+        $releaser = null;
+        if ($release) {
+            $releaser = m::mock(Releaser::class);
+            $releaser->shouldReceive('release')->andReturnUsing($release);
+        }
+
+        $failer = null;
+        if ($fail) {
+            $failer = m::mock(\RabbitEvents\Foundation\Contracts\Transport::class);
+            $failer->shouldReceive('send')->andReturnUsing($fail);
+        }
+
+        $deliveries = 0;
+        $consumer = m::mock(Consumer::class);
+        $consumer->shouldReceive('nextMessage')->andReturnUsing(function () use (&$deliveries, $message) {
+            // Without the fix the worker takes the requeued message again; end the test instead of looping.
+            return $deliveries++ === 0 ? $message : throw new ConnectionLostException();
+        });
+        $consumer->shouldNotReceive('acknowledge');
+        $consumer->shouldReceive('reject')->once()->with($message, true);
+
+        $processor = m::mock(Processor::class);
+        $processor->shouldReceive('process')->andReturnUsing(function (Message $message) use ($listenerFailed) {
+            $exception = new \RuntimeException('Listener failed');
+
+            if ($listenerFailed) {
+                $message->markAsFailed($exception); // what Processor does when a listener used up its tries
+            }
+
+            throw $exception;
+        });
+
+        $worker = new Worker($this->exceptionHandler, $this->events);
+        $worker->setReleaser($releaser)->setFailer($failer);
+        $status = $worker->work($processor, $consumer, $this->createListenerOptions(['maxTries' => $maxTries]));
+
+        self::assertSame(WorkerExitStatus::ERROR, $status);
+        self::assertSame(1, $deliveries);
+        $this->exceptionHandler->shouldNotHaveReceived('report', [m::type(ConnectionLostException::class)]);
     }
 
     private function workOnce(Processor $processor, Consumer $consumer, ?Releaser $releaser = null): void
@@ -194,6 +262,21 @@ class WorkerTest extends TestCase
     {
         $processor = m::mock(Processor::class);
         $processor->shouldReceive('process')->andThrow($exception);
+
+        return $processor;
+    }
+
+    /**
+     * A listener failed: Handler::release() returned the message to the queue, and the exception reaches the worker.
+     */
+    private function listenerFailing(\Throwable $exception): Processor
+    {
+        $processor = m::mock(Processor::class);
+        $processor->shouldReceive('process')->andReturnUsing(function (Message $message) use ($exception) {
+            $message->markAsReleased();
+
+            throw $exception;
+        });
 
         return $processor;
     }
@@ -228,9 +311,9 @@ class WorkerTest extends TestCase
 
             return $this->createRealMessage();
         });
-        $consumer->shouldReceive('reject');
+        $consumer->shouldReceive('acknowledge');
 
-        $worker->work($this->processorThrowing(new \RuntimeException('Database is down')), $consumer, $this->options);
+        $worker->work($this->listenerFailing(new \RuntimeException('Database is down')), $consumer, $this->options);
 
         self::assertSame(['next', 'next', 'sleep 1', 'sleep 1', 'sleep 1', 'next'], $log);
         $this->events->shouldHaveReceived('dispatch')->with(m::on(
@@ -277,9 +360,9 @@ class WorkerTest extends TestCase
 
         $consumer = m::mock(Consumer::class);
         $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
-        $consumer->shouldReceive('reject');
+        $consumer->shouldReceive('acknowledge');
 
-        $status = $worker->work($this->processorThrowing(new \RuntimeException()), $consumer, $this->options);
+        $status = $worker->work($this->listenerFailing(new \RuntimeException()), $consumer, $this->options);
 
         self::assertSame(WorkerExitStatus::SUCCESS, $status);
         self::assertSame(1, $slept);
@@ -294,10 +377,10 @@ class WorkerTest extends TestCase
 
         $consumer = m::mock(Consumer::class);
         $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
-        $consumer->shouldReceive('reject');
+        $consumer->shouldReceive('acknowledge');
 
         $status = $worker->work(
-            $this->processorThrowing(new \RuntimeException()),
+            $this->listenerFailing(new \RuntimeException()),
             $consumer,
             $this->createListenerOptions(['memory' => 0])
         );
@@ -314,11 +397,12 @@ class WorkerTest extends TestCase
 
         $consumer = m::mock(Consumer::class);
         $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
-        $consumer->shouldReceive('reject');
+        $consumer->shouldReceive('acknowledge');
 
         $processor = m::mock(Processor::class);
-        $processor->shouldReceive('process')->andReturnUsing(function () use ($worker) {
+        $processor->shouldReceive('process')->andReturnUsing(function (Message $message) use ($worker) {
             $worker->shouldQuit = true; // SIGTERM
+            $message->markAsReleased();
 
             throw new \RuntimeException();
         });
@@ -336,9 +420,9 @@ class WorkerTest extends TestCase
 
         $consumer = m::mock(Consumer::class);
         $consumer->shouldReceive('nextMessage')->once()->andReturn($this->createRealMessage());
-        $consumer->shouldReceive('reject');
+        $consumer->shouldReceive('acknowledge');
 
-        $status = $worker->work($this->processorThrowing(new \RuntimeException()), $consumer, $this->options);
+        $status = $worker->work($this->listenerFailing(new \RuntimeException()), $consumer, $this->options);
 
         self::assertSame(WorkerExitStatus::MEMORY_LIMIT, $status);
         Carbon::setTestNow();

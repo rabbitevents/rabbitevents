@@ -16,6 +16,8 @@ All notable changes to this project will be documented in this file.
 - `Dispatcher::makeListener()` returns a callable `RegisteredListener` for class and object listeners instead of a `Closure` (closures are still returned as they are); `Handler` accepts any callable. `RegisteredListener` builds the listener and reads its retry policy, `failed()` and middleware; the protected `Dispatcher` methods `instantiateListener()`, `makeListenerInstance()` and `extractMiddleware()` are removed.
 
 ### Fixed
+- A message failed while its `{queue}.failed` queue was deleted (e.g. by hand while the worker ran) was lost without an error: RabbitMQ dropped the copy as unroutable, and the original was acknowledged. The failed queue is now declared again before each message sent to it.
+- A worker whose publishing failed while it could still consume looped forever on one message. When releasing a message failed, the worker returned the original to the queue as it was received, without its attempts, and RabbitMQ gave it back at once: `--tries` never stopped it, and the listeners that had handled it ran again on every round. A message that couldn't be moved to `{queue}.failed` made the worker exit with an exception. Now the worker returns such a message to the queue and stops with exit code 1, and the process manager restarts it. (When RabbitMQ refuses a publish, it closes the channel, and the worker exits with that exception as before.)
 - `failed()` of a `[$object, 'method']` or invokable object listener was called on a new instance of its class built by the container, which failed for a constructor with parameters the container can't resolve; the object itself is used now.
 
 ## [10.0.1]

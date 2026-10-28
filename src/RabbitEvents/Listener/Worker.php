@@ -30,6 +30,11 @@ class Worker
      */
     public bool $shouldQuit = false;
 
+    /**
+     * A message went back to the queue as it was received (see requeue()): the worker must stop.
+     */
+    protected bool $requeued = false;
+
     protected ?Transport $failer = null;
 
     protected ?Releaser $releaser = null;
@@ -90,7 +95,7 @@ class Worker
                 }
 
                 if ($message->hasFailed()) {
-                    $this->failMessage($message, $consumer);
+                    $this->failOrRequeue($message, $consumer);
                 } elseif (!$interruption || $message->isReleased()) {
                     $consumer->acknowledge($message);
                 } else {
@@ -154,7 +159,7 @@ class Worker
      * Processing threw outside the listeners (a failing listener releases the message itself), so the
      * message was not handled completely and must not be acknowledged as handled. A released copy keeps
      * `x-succeeded-listeners`, so listeners that already handled it skip it. Requeueing the original is
-     * the fallback: RabbitMQ redelivers it as it was received, and those listeners run again.
+     * the fallback, and it stops the worker (see requeue()).
      * On its `--tries`th delivery the message fails instead, so that an interruption can't loop forever.
      */
     protected function returnInterruptedMessage(
@@ -166,7 +171,7 @@ class Worker
         if ($options->maxTries > 0 && $message->attempts() >= $options->maxTries) {
             $message->markAsFailed($interruption);
             $this->events->dispatch(new MessageProcessingFailed($message, $interruption));
-            $this->failMessage($message, $consumer);
+            $this->failOrRequeue($message, $consumer);
 
             return;
         }
@@ -177,7 +182,35 @@ class Worker
             $this->exceptions->report($throwable);
         }
 
-        $message->isReleased() ? $consumer->acknowledge($message) : $consumer->reject($message, true);
+        $message->isReleased() ? $consumer->acknowledge($message) : $this->requeue($message, $consumer);
+    }
+
+    /**
+     * A message that can't be moved to the failed queue (the broker refuses the publish) is not lost: it goes back
+     * to its queue.
+     */
+    protected function failOrRequeue(Message $message, Consumer $consumer): void
+    {
+        try {
+            $this->failMessage($message, $consumer);
+        } catch (Throwable $throwable) {
+            $this->exceptions->report($throwable);
+
+            $this->requeue($message, $consumer);
+        }
+    }
+
+    /**
+     * Return the message as it was received, when no copy of it could be published. Its attempts, the listeners that
+     * handled it and its failure aren't recorded in it, and RabbitMQ puts it at the head of the queue: this worker
+     * would handle it again at once, forever, running even the listeners that had handled it, and `--tries` could
+     * never stop it. So the worker stops; the process manager restarts it later.
+     */
+    protected function requeue(Message $message, Consumer $consumer): void
+    {
+        $consumer->reject($message, true);
+
+        $this->requeued = true;
     }
 
     /**
@@ -267,6 +300,10 @@ class Worker
      */
     protected function stopIfNecessary(ListenerOptions $options): ?WorkerExitStatus
     {
+        if ($this->requeued) {
+            return WorkerExitStatus::ERROR;
+        }
+
         if ($this->shouldQuit) {
             return WorkerExitStatus::SUCCESS;
         }
