@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [10.1.0]
 
+This release is about reliability: workers pause instead of failing a whole queue while a dependency is down, each listener gets its own retry policy, no message is lost or handled in a loop when the worker can't publish, and publishing can go through an outbox.
+
 ### Added
+- **Outbox hook**: `RabbitEvents\Publisher\Contracts\Outbox` can take published messages to deliver them itself, e.g. from a table written in the transaction of the event. It is bound to `NullOutbox`, which takes none, so nothing changes without an outbox package. The optional [`rabbitevents/outbox`](https://github.com/rabbitevents/outbox) package implements it with a database table (suggested in `composer.json`). An `afterCommit` event reaches the outbox after the commit, as it is published now.
+- **`MessagePublished` event**: the publisher dispatches `RabbitEvents\Publisher\Events\MessagePublished` when it sends a message (an outbox, when it sends a message it took).
 - **Kill switch**: a worker stops consuming for `restart_timeout` seconds when at least `trip_threshold` percent of the messages it handled in the last `tracking_period` seconds failed (after `activation_threshold` messages), instead of moving the whole queue to `{queue}.failed` while a dependency is down. After the pause, a failing first message trips it again. Disabled by default (`rabbitevents.kill_switch.enabled`, `RABBITEVENTS_KILL_SWITCH_*`); the worker dispatches `KillSwitchTripped` and `KillSwitchRestarted`. Nothing changes on the wire.
 - **Retry policy per listener**: a listener class can set `$tries`, `tries()` or `#[Tries]`, and `$backoff`, `backoff()` or `#[Backoff]`. They override `--tries` and `--sleep` for this listener, as in Laravel queued listeners. Both `RabbitEvents\Listener\Attributes` and Laravel's `Illuminate\Queue\Attributes` are supported. Backoff is an int, or an array of delays per attempt whose last value repeats. The options are read from the class without calling its constructor, and `tries()` / `backoff()` get the handler's arguments.
 

@@ -28,6 +28,7 @@
     "ext-json": "*",
     "illuminate/console": "^11.0|^12.0|^13.0",
     "illuminate/container": "^11.0|^12.0|^13.0",
+    "illuminate/contracts": "^11.0|^12.0|^13.0",
     "illuminate/log": "^11.0|^12.0|^13.0",
     "illuminate/support": "^11.0|^12.0|^13.0",
     "rabbitevents/foundation": "self.version",
@@ -40,6 +41,9 @@
     "files": [
       "functions.php"
     ]
+  },
+  "suggest": {
+    "rabbitevents/outbox": "Delivers published messages through a database outbox: written in the transaction of the event, retried until sent or expired, coalesced by object key."
   },
   "extra": {
     "laravel": {

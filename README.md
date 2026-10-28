@@ -37,6 +37,7 @@ RabbitEvents helps you publish an event and handle it seamlessly in other applic
    * [Kill Switch](#kill-switch)
    * [Deduplication](#deduplication)
    * [Transactional Publishing (ShouldPublishAfterCommit)](#transactional-publishing)
+   * [Outbox](#outbox)
    * [Distributed Tracing & Context Propagation](#distributed-tracing)
 1. [Listeners & Payloads](#listeners-payloads)
 1. [Custom Serializers](#custom-serializers)
@@ -377,6 +378,9 @@ publish((new OrderShipped($order))->afterCommit());
 
 > The `$afterCommit` property is declared by the `Publishable` trait, so don't redeclare it in your event class: PHP rejects a trait property redeclared with a different default.
 
+### Outbox<a name="outbox"></a>
+`publish()` sends the message right away: if the broker can't be reached, the exception reaches your code and the message isn't sent. If your service has a database, the optional [`rabbitevents/outbox`](https://github.com/rabbitevents/outbox) package writes published messages to a table instead (in the transaction of the event, when there is one) and delivers them from there: it retries until a message is sent or its time to live is over, so a stale message is never sent, and it can coalesce the messages of one object. The core only has the hook, `Publisher\Contracts\Outbox`; it doesn't need a database. See the [Publisher documentation](./src/RabbitEvents/Publisher/README.md#when-publishing-fails).
+
 ### Distributed Tracing & Context Propagation<a name="distributed-tracing"></a>
 Laravel `Context` data is sent with each message in the `trace_context` property and added to the listener's `Context` while the message is handled:
 
@@ -443,6 +447,7 @@ New serializers are prepended to the registry, so they can override default beha
 
 - [Redis Streams Transport](https://github.com/rabbitevents/redis-transport) - Redis Streams transport driver for RabbitEvents.
 - [Deduplication](https://github.com/rabbitevents/deduplication) - Skips redelivered messages using a Laravel cache store shared by the workers.
+- [Outbox](https://github.com/rabbitevents/outbox) - Delivers published messages through a database outbox, retried until sent or expired.
 - [Symfony Bundle](https://github.com/rabbitevents/symfony-bundle) - Official Symfony integration bundle for RabbitEvents.
 - [Protobuf Support](https://github.com/rabbitevents/protobuf) - Official Google Protobuf serialization support for RabbitEvents. Required for using Protobuf messages.
 

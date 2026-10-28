@@ -83,7 +83,8 @@
     "ext-amqp": "Using this extension makes your app faster. If you're using it you need to install enqueue/amqp-ext.",
     "enqueue/amqp-ext": "This package is necessary if you want to use `ext-amqp`.",
     "rabbitevents/protobuf": "The Protobuf serializer for RabbitEvents.",
-    "rabbitevents/deduplication": "Skips messages redelivered after they were handled, using a Laravel cache store shared by the workers."
+    "rabbitevents/deduplication": "Skips messages redelivered after they were handled, using a Laravel cache store shared by the workers.",
+    "rabbitevents/outbox": "Delivers published messages through a database outbox: written in the transaction of the event, retried until sent or expired, coalesced by object key."
   },
   "config": {
     "sort-packages": true,
