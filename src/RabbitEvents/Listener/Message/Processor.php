@@ -195,7 +195,7 @@ class Processor
 
         $tries = $this->tries($handler, $options);
 
-        if ($tries === 0 || $handler->attempts() < $tries) {
+        if ($tries <= 0 || $handler->attempts() < $tries) {
             return;
         }
 
@@ -208,7 +208,7 @@ class Processor
     }
 
     /**
-     * The listener's own tries, or `--tries`. 0 means unlimited.
+     * The listener's own tries, or `--tries`. 0 (or less) means unlimited.
      */
     protected function tries(Handler $handler, ListenerOptions $options): int
     {

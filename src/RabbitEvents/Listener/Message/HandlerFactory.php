@@ -11,7 +11,8 @@ use RabbitEvents\Listener\Support\Releaser;
 class HandlerFactory
 {
     /**
-     * @param Container $container Not used: listeners are built by the Dispatcher (see RegisteredListener)
+     * @param Container $container Deprecated, not used: listeners are built by the Dispatcher (see RegisteredListener).
+     *                             It will be removed in 11.0.
      */
     public function __construct(
         Container $container,

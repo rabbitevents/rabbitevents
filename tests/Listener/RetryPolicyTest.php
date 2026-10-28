@@ -94,6 +94,33 @@ class RetryPolicyTest extends TestCase
         self::assertCount(10, $this->producer->sent);
     }
 
+    public static function negativeTries(): array
+    {
+        return [
+            'listener $tries = -1' => [NegativeTries::class, 3],
+            '--tries=-1' => [NoPolicy::class, -1],
+        ];
+    }
+
+    /**
+     * As 0, a negative number of tries is unlimited. Before, the message was released after the first attempt and
+     * failed on the next delivery without running the listener.
+     */
+    #[DataProvider('negativeTries')]
+    public function testNegativeTriesIsUnlimited(string $listener, int $workerTries): void
+    {
+        $this->dispatcher->listen('order.created', $listener);
+        $message = $this->message();
+
+        for ($delivery = 1; $delivery <= 5; $delivery++) {
+            $this->deliver($message, $this->options(maxTries: $workerTries));
+        }
+
+        self::assertFalse($message->hasFailed());
+        self::assertCount(5, $this->producer->sent);
+        self::assertCount(5, RetryListenerCalls::$calls, 'The listener runs on every delivery');
+    }
+
     public function testListenerWithoutTriesUsesWorkerTries(): void
     {
         $this->dispatcher->listen('order.created', NoPolicy::class);
@@ -111,6 +138,8 @@ class RetryPolicyTest extends TestCase
     {
         return [
             '$backoff int' => [BackoffInt::class, [10, 10, 10]],
+            // A negative delay would make RabbitMQ refuse the delay queue (negative x-message-ttl): retried at once.
+            '$backoff negative' => [BackoffNegative::class, [0, 0, 0]],
             '$backoff array, the last value repeats' => [BackoffArray::class, [1, 5, 5]],
             'backoff() method' => [BackoffMethod::class, [2, 4, 8]],
             'backoff() returning an int' => [BackoffMethodInt::class, [6, 6, 6]],
@@ -479,6 +508,16 @@ class NoPolicy
 class BackoffInt extends NoPolicy
 {
     public int $backoff = 10;
+}
+
+class BackoffNegative extends NoPolicy
+{
+    public int $backoff = -1;
+}
+
+class NegativeTries extends NoPolicy
+{
+    public int $tries = -1;
 }
 
 class BackoffArray extends NoPolicy

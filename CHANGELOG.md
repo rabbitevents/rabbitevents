@@ -23,6 +23,11 @@ This release is about reliability: workers pause instead of failing a whole queu
 - A message failed while its `{queue}.failed` queue was deleted (e.g. by hand while the worker ran) was lost without an error: RabbitMQ dropped the copy as unroutable, and the original was acknowledged. The failed queue is now declared again before each message sent to it.
 - A worker whose publishing failed while it could still consume looped forever on one message. When releasing a message failed, the worker returned the original to the queue as it was received, without its attempts, and RabbitMQ gave it back at once: `--tries` never stopped it, and the listeners that had handled it ran again on every round. A message that couldn't be moved to `{queue}.failed` made the worker exit with an exception. Now the worker returns such a message to the queue and stops with exit code 1, and the process manager restarts it. (When RabbitMQ refuses a publish, it closes the channel, and the worker exits with that exception as before.)
 - `failed()` of a `[$object, 'method']` or invokable object listener was called on a new instance of its class built by the container, which failed for a constructor with parameters the container can't resolve; the object itself is used now.
+- A negative delay before a retry (`--sleep=-1`, or a negative `$backoff`) made RabbitMQ refuse the delay queue (negative `x-message-ttl`, 406) and the worker exit with an exception. The message is now retried right away.
+
+### Deprecated
+- The `$container` parameter of `HandlerFactory::__construct()`: it isn't used, since listeners are built by `RegisteredListener`. It will be removed in 11.0.
+- The `$failedCallback` parameter of `Handler::__construct()`: `HandlerFactory` doesn't pass it any more, since `failed()` is called through `RegisteredListener`. It will be removed in 11.0.
 
 ## [10.0.1]
 

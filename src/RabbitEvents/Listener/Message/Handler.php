@@ -38,6 +38,9 @@ class Handler
      */
     private ?RegisteredListener $registeredListener;
 
+    /**
+     * @param mixed $failedCallback Deprecated: failed() is called through RegisteredListener. It will be removed in 11.0.
+     */
     public function __construct(
         public readonly Message $message,
         callable $listener,
