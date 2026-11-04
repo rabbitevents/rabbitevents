@@ -14,7 +14,7 @@
 > - **GitHub Repository**: [github.com/rabbitevents/rabbitevents](https://github.com/rabbitevents/rabbitevents) (formerly `nuwber/rabbitevents`)
 > - **Composer Package**: `rabbitevents/rabbitevents` (starting from version 10.0)
 >
-> Please update your `composer.json` to require `rabbitevents/rabbitevents:^10.0`. All PHP classes and namespaces (`RabbitEvents\...`) remain identical, so no application code changes are required.
+> Please update your `composer.json` to require `rabbitevents/rabbitevents:^10.1`. All PHP classes and namespaces (`RabbitEvents\...`) remain identical, so no application code changes are required.
 
 Let's imagine a use case: a User made a payment. You need to handle this payment, register the user, send him emails, send analytics data to your analysis system, and so on. The modern infrastructure requires you to create microservices that do their specific job and only it: one handles payments, one is for user management, one is the mailing system, one is for analysis. How to let all of them know that a payment succeeded and handle this message? The answer is "To use RabbitEvents".
 
@@ -140,7 +140,7 @@ To upgrade, replace `nuwber/rabbitevents` in your `composer.json` or run:
 
 ```bash
 composer remove nuwber/rabbitevents
-composer require rabbitevents/rabbitevents:^10.0
+composer require rabbitevents/rabbitevents:^10.1
 ```
 
 > **Zero Namespace Changes:** The PHP namespace remains `RabbitEvents\...`. You do **not** need to change any `use` statements or event classes in your codebase.
@@ -166,7 +166,7 @@ In 9.x a message that failed all its tries was dropped. 10.x moves it to `{queue
 
 ---
 
-### What's New in 10.0
+### What's New in 10.x
 
 * **Failed message management:** Messages that failed all tries are kept in `{queue}.failed` and managed with `rabbitevents:failed`, `retry`, `forget` and `flush`.
 * **Message IDs:** Every published message has a UUID, returned by `publish()` and shown in listener logs.
