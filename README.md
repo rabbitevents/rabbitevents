@@ -33,7 +33,7 @@ RabbitEvents helps you publish an event and handle it seamlessly in other applic
 1. [Reliability & Guarantees (Zero-DB Architecture)](#reliability)
    * [Message IDs & Observability](#message-ids)
    * [Retries](#retries)
-   * [Failed Messages](#failed-messages)
+   * [Failed Messages (Dead Letter Queue)](#failed-messages)
    * [Kill Switch](#kill-switch)
    * [Deduplication](#deduplication)
    * [Transactional Publishing (ShouldPublishAfterCommit)](#transactional-publishing)
@@ -324,10 +324,12 @@ class SendInvoice
 
 See the [Listener documentation](./src/RabbitEvents/Listener/README.md#retries) for details.
 
-### Failed Messages<a name="failed-messages"></a>
-When a listener exhausts its tries (`--tries=3` or its own `$tries`), times out, or throws `FailedException`, RabbitEvents moves the message to the `{queue}.failed` queue instead of dropping it.
+### Failed Messages (Dead Letter Queue)<a name="failed-messages"></a>
+When a listener exhausts its tries (`--tries=3` or its own `$tries`), times out, or throws `FailedException`, RabbitEvents moves the message to the `{queue}.failed` dead letter queue (DLQ) instead of dropping it.
 
 The failed message keeps its payload, `message_id` and `trace_context`, and gets the properties `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` and `x-listener`. Listeners that already succeeded are recorded in `x-succeeded-listeners` and skipped on retry.
+
+> **Why `{queue}.failed` instead of `x-dead-letter-exchange` on the main queue?** Publishing failed messages directly from the worker records the PHP exception, the failing listener, and `x-succeeded-listeners` on the message, and leaves the main queue without extra arguments so 9.x and 10.x workers can share it without a `406 PRECONDITION_FAILED` migration. RabbitMQ's native dead-letter exchange (`DLX` + `TTL`) is used by `RabbitMqDlxDelayStrategy` for delayed retries between attempts.
 
 ```bash
 # List failed messages, for all registered events or a given scope

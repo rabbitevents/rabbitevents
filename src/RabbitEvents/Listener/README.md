@@ -18,7 +18,7 @@ If you only need to handle events, you can use the RabbitEvents `Listener` separ
 6. [Stopping The Propagation Of An Event](#stopping-propagation)
 7. [Reliability](#reliability)
    - [Retries](#retries)
-   - [Failed Messages](#failed-messages)
+   - [Failed Messages (Dead Letter Queue)](#failed-messages)
    - [Kill Switch](#kill-switch)
    - [Deduplication](#deduplication)
 8. [Console Commands](#commands)
@@ -360,14 +360,14 @@ class SendInvoice
 - Tries are counted **per listener**, in the `x-listener-attempts` property: if two listeners handle a message and the first one fails once, the second one still gets all its tries. Methods of one subscriber class share its `$tries`/`$backoff` but count their attempts separately.
 - Closures can't be identified across deliveries: they count the deliveries of the message (`x-attempts`), which include the retries of other listeners of the message, and use `--tries` and `--sleep`. A closure is never failed before it runs: when it throws on a delivery past `--tries`, the message fails.
 - `failed()` is called on the listener instance that handled the message, so it sees the state `handle()` left (Laravel calls it on a new instance).
-- Each distinct delay gets its own delay queue in RabbitMQ (created on first use). Transports that can't delay a delivery (Redis) retry right away.
+- Each distinct delay gets its own delay queue in RabbitMQ (created on first use, using RabbitMQ's dead-letter exchange `DLX` + `TTL` via `RabbitMqDlxDelayStrategy`). Transports that can't delay a delivery (Redis) retry right away.
 - To fail without retrying, throw `RabbitEvents\Listener\Exceptions\FailedException`.
 
-## Failed Messages <a name="failed-messages"></a>
+## Failed Messages (Dead Letter Queue) <a name="failed-messages"></a>
 
-A message fails when a listener exhausts its tries (`--tries` or [its own](#retries)), exceeds the timeout (`--timeout`), or throws `RabbitEvents\Listener\Exceptions\FailedException`. RabbitEvents then moves it to the `{queue}.failed` queue instead of dropping it:
+A message fails when a listener exhausts its tries (`--tries` or [its own](#retries)), exceeds the timeout (`--timeout`), or throws `RabbitEvents\Listener\Exceptions\FailedException`. RabbitEvents then moves it to the `{queue}.failed` dead letter queue (DLQ) instead of dropping it:
 
-- `{queue}.failed` is a plain durable queue declared by `rabbitevents:listen` next to the listener queue. The listener queue itself is declared exactly as in 9.x, without extra arguments, so 9.x and 10.x workers can consume the same queue.
+- `{queue}.failed` is a plain durable queue declared by `rabbitevents:listen` next to the listener queue, and the worker publishes failed messages to it directly rather than through an `x-dead-letter-exchange` argument on the listener queue. This lets the worker attach the PHP exception, the failing listener, and `x-succeeded-listeners`, and keeps the listener queue declared exactly as in 9.x, without extra arguments, so 9.x and 10.x workers can consume the same queue without a `406 PRECONDITION_FAILED` migration.
 - The failed message keeps its payload, `message_id` and `trace_context` and gets these properties: `x-failed-at`, `x-original-routing-key`, `x-original-queue`, `x-exception-class`, `x-exception-message`, `x-exception-trace` (message and trace are cut to 4 KB to fit into one AMQP frame) and `x-listener`.
 - Messages published by RabbitEvents 9.x have no `message_id`. They get one when moved to `{queue}.failed`, so they can be retried or deleted by ID.
 - Listeners that already succeeded on a message are recorded in `x-succeeded-listeners` and are skipped when the message is retried, both after a listener released it and after `rabbitevents:retry`. Listeners should still be idempotent. `rabbitevents:retry` resets the attempts, so every listener gets all its tries again.
